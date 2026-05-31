@@ -889,5 +889,8 @@ def predict():
 
 if __name__=="__main__":
     load_inference_model()
-    print("[SERVER] http://localhost:5000")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    print("[SERVER] http://127.0.0.1:5000 (dev) — debug=False, use_reloader=False")
+    # For local debugging keep a single process (disable reloader) and bind to
+    # localhost to avoid system firewall or network differences causing
+    # intermittent connection refused errors in the browser.
+    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
