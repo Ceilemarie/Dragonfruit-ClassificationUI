@@ -126,17 +126,31 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
     // Set the overlay image with proper styling
-    maskElement.style.backgroundColor = 'transparent';
-    maskElement.style.backgroundImage = `url("${imageUrl}")`;
-    maskElement.style.backgroundRepeat = 'no-repeat';
-    maskElement.style.backgroundPosition = 'center';
-    maskElement.style.backgroundSize = 'cover';
-    maskElement.style.opacity = '0.85';
-    maskElement.style.filter = 'saturate(1.2) contrast(1.1) brightness(1.05)';
+    // Fade out, swap image, fade in for a smooth transition
     try {
-      maskElement.style.mixBlendMode = blendMode || 'normal';
+      maskElement.style.transition = maskElement.style.transition || 'opacity 220ms ease, transform 220ms ease';
+      maskElement.style.opacity = '0';
+      // Allow paint to clear before changing background
+      requestAnimationFrame(() => {
+        maskElement.style.backgroundColor = 'transparent';
+        maskElement.style.backgroundImage = `url("${imageUrl}")`;
+        maskElement.style.backgroundRepeat = 'no-repeat';
+        maskElement.style.backgroundPosition = 'center';
+        maskElement.style.backgroundSize = 'cover';
+        maskElement.style.filter = 'saturate(1.2) contrast(1.1) brightness(1.05)';
+        maskElement.style.mixBlendMode = blendMode || 'normal';
+        // small delay to ensure the new background is painted then fade in
+        setTimeout(() => { maskElement.style.opacity = '0.85'; }, 30);
+      });
     } catch (e) {
-      // ignore if style cannot be set
+      // fallback to immediate set
+      maskElement.style.backgroundColor = 'transparent';
+      maskElement.style.backgroundImage = `url("${imageUrl}")`;
+      maskElement.style.backgroundRepeat = 'no-repeat';
+      maskElement.style.backgroundPosition = 'center';
+      maskElement.style.backgroundSize = 'cover';
+      maskElement.style.opacity = '0.85';
+      try { maskElement.style.mixBlendMode = blendMode || 'normal'; } catch (err) {}
     }
   }
 
@@ -286,12 +300,10 @@ document.addEventListener('DOMContentLoaded', () => {
       formData.append('file', lastUploadedFile);
       formData.append('focus_x', String(Number(point?.x) || 50));
       formData.append('focus_y', String(Number(point?.y) || 50));
-      formData.append('crop_pct', '55');
+      // Slightly smaller crop yields faster, more localized updates
+      formData.append('crop_pct', '45');
 
-      const response = await fetch(API_PREDICT_URL, {
-        method: 'POST',
-        body: formData,
-      });
+      const response = await fetchWithRetry(API_PREDICT_URL, { method: 'POST', body: formData }, 2);
 
       const data = await response.json();
       if (requestId !== focusRequestSeq) return;
@@ -304,6 +316,31 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
+  async function fetchWithRetry(url, opts, retries = 2, backoff = 300) {
+    let lastErr = null;
+    for (let i = 0; i <= retries; i++) {
+      try {
+        const res = await fetch(url, opts);
+        if (!res.ok) {
+          // Attempt to parse server JSON error for better message
+          let body = null;
+          try { body = await res.json(); } catch (e) { /* ignore */ }
+          const msg = body && body.error ? body.error : `HTTP ${res.status}`;
+          throw new Error(msg);
+        }
+        return res;
+      } catch (err) {
+        lastErr = err;
+        if (i < retries) {
+          await new Promise(r => setTimeout(r, backoff * (i + 1)));
+          continue;
+        }
+        throw lastErr;
+      }
+    }
+    throw lastErr;
+  }
+
   function scheduleFocusedPrediction(point) {
     lastPointerPoint = {
       x: Number(point?.x) || 50,
@@ -312,9 +349,10 @@ document.addEventListener('DOMContentLoaded', () => {
     if (focusDebounceTimer) {
       clearTimeout(focusDebounceTimer);
     }
+    // Reduce debounce for snappier UI while still throttling rapid pointer moves
     focusDebounceTimer = setTimeout(() => {
       requestFocusedPrediction(lastPointerPoint);
-    }, 220);
+    }, 120);
   }
 
   // Pointer rendering removed - pointers are now drawn on images in Python backend
@@ -658,11 +696,7 @@ document.addEventListener('DOMContentLoaded', () => {
       const formData = new FormData();
       formData.append('file', file);
 
-      const response = await fetch(API_URL, {
-        method: 'POST',
-        body: formData,
-      });
-
+      const response = await fetchWithRetry(API_URL, { method: 'POST', body: formData }, 2);
       const data = await response.json();
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Backend inference failed.');
@@ -684,6 +718,11 @@ document.addEventListener('DOMContentLoaded', () => {
       // create or refresh the heatmap legend/explanation
       ensureHeatmapLegend();
       applyFocusedResponse(data);
+      // Immediately request a focused crop-based prediction at the top focus point
+      try {
+        const fp = (Array.isArray(data.focus_points) && data.focus_points.length>0) ? data.focus_points[0] : null;
+        if (fp) requestFocusedPrediction({ x: fp.x, y: fp.y });
+      } catch (e) { /* ignore */ }
       if (loadingOverlay) {
         loadingOverlay.style.display = 'none';
         loadingOverlay.setAttribute('aria-hidden', 'true');

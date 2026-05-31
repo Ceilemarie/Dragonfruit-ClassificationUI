@@ -611,13 +611,14 @@ body[data-page="research"] #nav-btn-research {
   height: 100%;
   background: transparent;
   mix-blend-mode: normal;
-  opacity: 0.85;
+  opacity: 0.0;
   pointer-events: none;
   filter: saturate(1.2) contrast(1.1) brightness(1.05);
   z-index: 3;
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  transition: opacity 220ms ease, transform 220ms ease;
 }
 
 .gradcam-overlay-box .gradcam-color-mask {
@@ -628,13 +629,14 @@ body[data-page="research"] #nav-btn-research {
   height: 100%;
   background: transparent;
   mix-blend-mode: normal;
-  opacity: 0.85;
+  opacity: 0.0;
   pointer-events: none;
   filter: saturate(1.25) contrast(1.1) brightness(1.05);
   z-index: 3;
   background-size: cover;
   background-position: center;
   background-repeat: no-repeat;
+  transition: opacity 220ms ease, transform 220ms ease;
 }
 
 /* Chart path draw animation for SVG metric charts */

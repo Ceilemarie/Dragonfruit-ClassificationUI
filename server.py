@@ -23,7 +23,7 @@ CORS(app)
 
 MODEL_CANDIDATES = [
     "Model1_EfficientNetB0_best.keras",
-    "EfficientNetB0_3Class_Robust.keras",
+   
 ]
 
 def _resolve_model_path():
