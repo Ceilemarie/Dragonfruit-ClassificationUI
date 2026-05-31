@@ -1,0 +1,741 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pitaya AI - Dragon Fruit Diagnostics Terminal</title>
+  <meta name="description" content="Assess freshness, detect issues, and optimize health for every dragon fruit with neural networks.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body data-page="home">
+
+  <!-- Master Layout Container -->
+  <div class="app-container" id="app-root">
+    
+    <!-- Floating Organic Blobs (Only visible on Home and Research pages) -->
+    <div class="blob-container">
+      <div class="blob blob-green-top"></div>
+      <div class="blob blob-pink-top-right"></div>
+      <div class="blob blob-green-bottom-left"></div>
+      <div class="blob blob-pink-bottom-center"></div>
+      <div class="blob blob-green-right"></div>
+    </div>
+
+    <!-- Dynamic Neural Nodes Background (Only visible on Analyze page) -->
+    <div class="neural-bg" id="neural-matrix">
+      <!-- Custom SVG digital neural network grid -->
+      <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+        <path d="M 100,200 L 250,150 L 350,300 L 200,450 L 100,200 Z" fill="none" stroke="rgba(76, 175, 80, 0.05)" stroke-width="1.5"/>
+        <path d="M 800,100 L 950,250 L 900,450 L 750,350 L 800,100 Z" fill="none" stroke="rgba(76, 175, 80, 0.05)" stroke-width="1.5"/>
+        <circle cx="100" cy="200" r="3" fill="rgba(76, 175, 80, 0.15)"/>
+        <circle cx="250" cy="150" r="3" fill="rgba(76, 175, 80, 0.15)"/>
+        <circle cx="350" cy="300" r="4" fill="rgba(76, 175, 80, 0.2)"/>
+        <circle cx="200" cy="450" r="3" fill="rgba(76, 175, 80, 0.15)"/>
+        <circle cx="800" cy="100" r="4" fill="rgba(76, 175, 80, 0.2)"/>
+        <circle cx="950" cy="250" r="3" fill="rgba(76, 175, 80, 0.15)"/>
+        <circle cx="900" cy="450" r="3" fill="rgba(76, 175, 80, 0.15)"/>
+        <circle cx="750" cy="350" r="3" fill="rgba(76, 175, 80, 0.15)"/>
+      </svg>
+    </div>
+
+    <!-- Navigation Header -->
+    <header class="landing-header">
+      <div id="mock-mode-banner" class="mock-mode-banner" style="display:none;">Backend running in MOCK mode — install TensorFlow for real inference</div>
+      <div class="header-nav">
+        <a href="#" class="header-logo" id="logo-click">
+          <!-- Cute SVG Dragon Fruit Logo -->
+          <svg class="logo-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+            <circle cx="50" cy="50" r="46" fill="#c2185b" stroke="#ffffff" stroke-width="3"/>
+            <path d="M50 22 C34 32, 28 55, 42 76 C46 80, 54 80, 58 76 C72 55, 66 32, 50 22 Z" fill="#e91e63"/>
+            <path d="M50 28 C38 36, 34 52, 45 68 C47 71, 53 71, 55 68 C66 52, 62 36, 50 28 Z" fill="#ffffff"/>
+            <path d="M50 22 L45 28 L50 26 L55 28 Z" fill="#4caf50"/>
+            <path d="M36 40 L34 46 L42 44 Z" fill="#8bc34a"/>
+            <path d="M64 40 L66 46 L58 44 Z" fill="#8bc34a"/>
+            <path d="M40 60 L36 65 L44 62 Z" fill="#8bc34a"/>
+            <path d="M60 60 L64 65 L56 62 Z" fill="#8bc34a"/>
+            <circle cx="48" cy="40" r="1.5" fill="#000"/>
+            <circle cx="53" cy="45" r="1.5" fill="#000"/>
+            <circle cx="46" cy="50" r="1.5" fill="#000"/>
+            <circle cx="52" cy="55" r="1.5" fill="#000"/>
+            <circle cx="48" cy="62" r="1.5" fill="#000"/>
+          </svg>
+        </a>
+        <nav class="nav-links-wrap">
+          <a href="#" class="nav-item" id="nav-btn-home">Home</a>
+          <a href="#" class="nav-item" id="nav-btn-analyze">Analyze</a>
+          <a href="#" class="nav-item" id="nav-btn-research">Research</a>
+        </nav>
+      </div>
+    </header>
+
+    <!-- ================= PAGE 1: HOME ================= -->
+    <main class="page-view" id="page-home">
+      <div class="landing-hero-container">
+        <!-- Left Column -->
+        <div class="hero-left">
+          <h1 class="hero-title-stitch">
+            Unlock Your<br>
+            Dragon Fruit’s<br>
+            Vitality.
+          </h1>
+          <p class="hero-subtext-stitch">
+            Leverage AI-powered analysis to assess freshness, detect issues, and optimize health for every dragon fruit.
+          </p>
+          <button class="start-btn-stitch" id="hero-start-btn">
+            Start Analysis
+            <span class="btn-arrow">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <polyline points="9 18 15 12 9 6"></polyline>
+              </svg>
+            </span>
+          </button>
+        </div>
+
+        <!-- Right Column -->
+        <div class="hero-right">
+          <div class="fruit-frame-container">
+            <img src="./dragonfruit.jpg" alt="Your Local Fresh Red Dragon Fruit Landing" class="fruit-frame-img">
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <!-- ================= PAGE 2: ANALYZE ================= -->
+    <main class="page-view" id="page-analyze">
+      <!-- Loading overlay shown while backend analyzes the uploaded image -->
+      <div id="analyze-loading-overlay" class="loading-overlay" aria-hidden="true" style="display: none;">
+        <div class="loading-overlay-backdrop"></div>
+        <div class="loading-overlay-content">
+          <div class="loading-spinner" aria-hidden="true"></div>
+          <div class="loading-text">Analyzing image…</div>
+        </div>
+      </div>
+      <div class="analyze-dashboard-grid">
+        
+        <!-- Center Panel: Upload & Image Grid -->
+        <div class="analyze-center">
+          <!-- Charcoal Upload Bar -->
+          <div class="upload-charcoal-bar" id="drag-drop-area">
+            <svg class="upload-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+              <polyline points="17 8 12 3 7 8"></polyline>
+              <line x1="12" y1="3" x2="12" y2="15"></line>
+            </svg>
+            <div class="upload-text-wrap">
+              <span class="upload-title-text">Upload Image</span>
+              <span class="upload-sub-text">Drag & Drop Dragon Fruit Image Here or Click to Upload</span>
+            </div>
+            <input type="file" id="dashboard-file-upload" accept="image/*" style="display: none;">
+          </div>
+
+          <!-- Health Status -->
+          <div class="dashboard-block">
+            <h3 class="dashboard-section-title">Health Status</h3>
+            <div class="status-badge-row">
+              <div id="health-status-single" class="status-single-badge">--</div>
+            </div>
+          </div>
+
+          <!-- 3-Column Visual Processing Grid -->
+          <div class="image-grid-3col">
+            <!-- 1. Original Photo -->
+            <div class="grid-card">
+              <div class="card-image-box" id="original-photo-box">
+              </div>
+              <span class="card-label">Original Photo</span>
+            </div>
+
+            <!-- 2. Pointer (pointers drawn in Python) -->
+            <div class="grid-card">
+              <div class="card-image-box" id="pointer-box">
+              </div>
+              <span class="card-label">Pointer</span>
+            </div>
+
+            <!-- 3. Grad-CAM (pointers drawn in Python) -->
+            <div class="grid-card">
+              <div class="card-image-box gradcam-overlay-box">
+                <div class="gradcam-color-mask"></div>
+              </div>
+              <span class="card-label">Grad-CAM</span>
+            </div>
+          </div>
+
+          <!-- Results & Insight Dark Card -->
+          <div class="insight-glass-card">
+            <h4 class="insight-title">Inference Engine Diagnostics</h4>
+            <div class="insight-content">
+              <div class="insight-header-line">
+                <span class="insight-label-bold">Classification:</span>
+                <span class="insight-value-highlight" id="insight-classification">Healthy, Grade A.</span>
+              </div>
+              <p class="insight-explanation" id="insight-desc">
+                <span class="insight-label-bold">Why:</span> No visible lesions, discoloration, or fungal growth patterns detected. The model confidently classifies this fruit as healthy, with key regions of interest highlighted by Grad-CAM and Heatmap, indicating firm flesh and no disease indicators.
+              </p>
+              
+              <!-- Sleek Neural Telemetry Meter -->
+              <div class="telemetry-divider"></div>
+              
+              <div class="telemetry-panel">
+                <div class="telemetry-bar-row">
+                  <span class="telemetry-lbl-mono">Softmax Confidence:</span>
+                  <div class="telemetry-bar-bg">
+                    <div class="telemetry-bar-fill" id="telemetry-confidence-bar" style="width: 98.49%;"></div>
+                  </div>
+                  <span class="telemetry-val-mono" id="telemetry-confidence-val">98.49%</span>
+                </div>
+                
+                <div class="telemetry-details-grid">
+                  <div class="telemetry-cell-mono">
+                    <span class="detail-label">Inference Latency</span>
+                    <span class="detail-value" id="telemetry-latency">42.6 ms</span>
+                  </div>
+                  <div class="telemetry-cell-mono">
+                    <span class="detail-label">Active Backbone</span>
+                    <span class="detail-value">EfficientNet-B0</span>
+                  </div>
+                  <div class="telemetry-cell-mono">
+                    <span class="detail-label">Softmax Probability</span>
+                    <span class="detail-value" id="telemetry-probability">0.9849</span>
+                  </div>
+                  <div class="telemetry-cell-mono">
+                    <span class="detail-label">Decision Threshold</span>
+                    <span class="detail-value">τ = 0.50</span>
+                  </div>
+                </div>
+
+                <div class="diagnostic-strip" id="debug-prediction-breakdown">
+                  <div class="diagnostic-item">
+                    <span class="detail-label">Top Prediction</span>
+                    <span class="detail-value" id="debug-top-prediction">healthy</span>
+                  </div>
+                  <div class="diagnostic-item">
+                    <span class="detail-label">Raw Outputs</span>
+                    <span class="detail-value" id="debug-raw-outputs">0.0000, 0.0000, 0.0000</span>
+                  </div>
+                  <div class="diagnostic-item">
+                    <span class="detail-label">Class Order</span>
+                    <span class="detail-value" id="debug-class-order">healthy / rotten / unknown</span>
+                  </div>
+                  <div class="diagnostic-item">
+                    <span class="detail-label">Used Conv Layer</span>
+                    <span class="detail-value" id="debug-used-layer">n/a</span>
+                  </div>
+                  <div class="diagnostic-item">
+                    <span class="detail-label">Heatmap Peak</span>
+                    <span class="detail-value" id="debug-heatmap-peak">0.0</span>
+                  </div>
+                </div>
+
+                <div class="prediction-spectrum" aria-label="Softmax vector chart">
+                  <div class="prediction-spectrum-header">
+                    <span>Softmax Vector</span>
+                    <span class="prediction-spectrum-meta" id="debug-spectrum-meta">p1 / p2 / p3</span>
+                  </div>
+                  <div class="prediction-spectrum-body">
+                    <div class="prediction-spectrum-row">
+                      <span class="prediction-spectrum-label">Healthy</span>
+                      <div class="prediction-spectrum-track"><div class="prediction-spectrum-fill healthy" id="spectrum-healthy"></div></div>
+                      <span class="prediction-spectrum-value" id="spectrum-healthy-val">0.0000</span>
+                    </div>
+                    <div class="prediction-spectrum-row">
+                      <span class="prediction-spectrum-label">Rotten</span>
+                      <div class="prediction-spectrum-track"><div class="prediction-spectrum-fill rotten" id="spectrum-rotten"></div></div>
+                      <span class="prediction-spectrum-value" id="spectrum-rotten-val">0.0000</span>
+                    </div>
+                    <div class="prediction-spectrum-row">
+                      <span class="prediction-spectrum-label">Unknown</span>
+                      <div class="prediction-spectrum-track"><div class="prediction-spectrum-fill unknown" id="spectrum-unknown"></div></div>
+                      <span class="prediction-spectrum-value" id="spectrum-unknown-val">0.0000</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- ================= PAGE 3: RESEARCH (SCREEN 3) ================= -->
+    <main class="page-view" id="page-research">
+      <div class="research-wrapper-stitch">
+        <!-- PDF Document Frame Outer -->
+        <div class="pdf-outer-frame">
+          
+          <!-- Top white header row -->
+          <div class="pdf-top-bar">
+            <div class="pdf-title-info">
+              <!-- PDF Red Icon -->
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#d32f2f" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                <polyline points="14 2 14 8 20 8"></polyline>
+                <line x1="16" y1="13" x2="8" y2="13"></line>
+                <line x1="16" y1="17" x2="8" y2="17"></line>
+                <polyline points="10 9 9 9 8 9"></polyline>
+              </svg>
+              <span class="pdf-doc-title">CeileGuce_ComparisonPaper.pdf</span>
+            </div>
+            
+            <a href="./CeileGuce_ComparisonPaper.pdf" download="CeileGuce_ComparisonPaper.pdf" class="pdf-download-btn-green" id="pdf-download-action">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              Download
+            </a>
+          </div>
+
+          <!-- Maroon Action Navigation Toolbar -->
+          <div class="pdf-action-toolbar">
+            <div class="pdf-nav-controls">
+              <span class="pdf-nav-arrow" id="pdf-nav-first">|&lt;</span>
+              <span class="pdf-nav-arrow" id="pdf-nav-prev">&lt;</span>
+              <span class="pdf-nav-page" id="pdf-nav-current">1</span>
+              <span class="pdf-nav-arrow" id="pdf-nav-next">&gt;</span>
+              <span class="pdf-nav-arrow" id="pdf-nav-last">&gt;|</span>
+            </div>
+            
+            <div class="pdf-zoom-controls">
+              <span class="pdf-zoom-btn" id="pdf-zoom-out">-</span>
+              <span class="pdf-zoom-val" id="pdf-zoom-level">100%</span>
+              <span class="pdf-zoom-btn" id="pdf-zoom-in">+</span>
+            </div>
+
+            <div class="pdf-utility-icons">
+              <!-- Download icon -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" title="Download PDF">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <!-- Print icon -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" title="Open in New Tab for Printing">
+                <polyline points="6 9 6 2 18 2 18 9"></polyline>
+                <path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"></path>
+                <rect x="6" y="14" width="12" height="8"></rect>
+              </svg>
+              <!-- Menu dots -->
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="1"></circle>
+                <circle cx="12" cy="5" r="1"></circle>
+                <circle cx="12" cy="19" r="1"></circle>
+              </svg>
+            </div>
+          </div>
+
+          <!-- Document Page Content Sheet (Scrollable) -->
+          <div class="pdf-document-scroller" id="pdf-scroller">
+            
+            <!-- PAGE 1 -->
+            <div class="pdf-page-sheet" data-page="1">
+              <div class="pdf-page-number-tag">Page 1 of 6</div>
+              <h2 class="paper-title" style="text-transform: uppercase;">COMPARATIVE ANALYSIS OF EFFICIENTNET-B0 AND MOBILENETV2 FOR DRAGON FRUIT QUALITY CLASSIFICATION</h2>
+              <div class="paper-authors" style="font-style: normal; font-weight: bold; margin-top: 0.75rem;">Ceile Marie C. Guce</div>
+              <div class="paper-affiliation">BS Computer Science, National University – Lipa<br>School of Architecture, Computing, and Engineering<br>gucecc@students.nu-lipa.edu.ph</div>
+              
+              <div class="paper-abstract">
+                <strong>Abstract</strong>—Deep learning, particularly Convolutional Neural Networks (CNNs), has demonstrated remarkable success in image classification tasks across multiple domains, including agriculture. Dragon fruit has many varieties that need to be identified quickly and accurately for packaging and marketing. Considering the increasing demand for dragon fruit, it is obvious that an automated classification system has significant commercial and scientific value by increasing sorting efficiency and reducing manual labor costs. With the increasing commercial demand for dragon fruit (Hylocereus spp.) in the Philippines, the need for rapid and accurate quality assessment has become essential for effective packaging and marketing. Traditional manual sorting is labor-intensive and prone to errors, particularly during the peak summer harvest when high temperatures accelerate fruit rotting. This study developed an automated classification system to distinguish between healthy and rotten dragon fruits using Deep Learning. Leveraging transfer learning, two Convolutional Neural Network (CNN) architectures, EfficientNet-B0 and MobileNetV2, were trained and evaluated using a custom dataset. Data augmentation, early stopping, and model checkpointing were implemented to enhance generalization and prevent overfitting. Results demonstrated that EfficientNet-B0 outperformed MobileNetV2, achieving a superior validation accuracy of 98.49% with a balanced precision and recall. While MobileNetV2 offered faster training speeds, it exhibited signs of overfitting compared to the stability of EfficientNet-B0. The findings suggest that an automated CNN-based system provides a high-precision, scalable solution for minimizing post-harvest losses and increasing sorting efficiency in the Philippine agricultural sector.
+                <br><br><strong>Keywords</strong>—Dragon fruit Classification, Fruit Classification, Image Classification, Convolutional Neural Networks, Rotten, Healthy, MobileNetV2, EfficientNet-B0
+              </div>
+
+              <div class="paper-two-columns">
+                <div class="paper-column">
+                  <h3 class="paper-section-heading">I. Introduction</h3>
+                  <p class="paper-para">
+                    The dragon fruit, also referred to as pitaya or pitahaya, is a common tropical and subtropical fruit that comes from a perennial plant in the genus Hylocereus of the Cactaceae family that originated in Central America [1,2]. It is classified into three species within the genus Hylocereus: Hylocereus guatemalensis (Hg), Hylocereus polyrhizus (Hp), and Hylocereus undatus (Hu), which is a pink peel and purple pulp; additionally, there is a yellow peel and white pulp species within Selenicereus, which is Selenicereus megalanthus (Sm).
+                  </p>
+                  <p class="paper-para">
+                    In the Philippines, the dragon fruit industry has seen a significant surge in popularity, with local production expanding across regions like Ilocos and CALABARZON. The fruit is particularly in-demand during the summer season due to its high-water content and refreshing properties, making it a seasonal staple for Filipino consumers. However, the peak harvest often coincides with the country's extreme heat and high humidity levels, which significantly accelerate the ripening and eventual senescence (rotting) of the fruit.
+                  </p>
+                </div>
+                <div class="paper-column">
+                  <p class="paper-para">
+                    The high ambient temperature in the Philippines shortens the shelf life of dragon fruit, leading to rapid microbial growth and physical degradation if not sorted and stored immediately. This poses a major challenge for local farmers and retailers, as manual inspection is often too slow to keep up with the volume of harvest during the peak months. Consequently, a substantial amount of produce is wasted before it even reaches the market.
+                  </p>
+                  <p class="paper-para">
+                    Integrating an automated classification system, specifically one capable of distinguishing between healthy and rotten fruit, is crucial for the Philippine market to minimize post-harvest losses and ensure that only high-quality produce is distributed to consumers during the critical summer months.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- PAGE 2 -->
+            <div class="pdf-page-sheet" data-page="2">
+              <div class="pdf-page-number-tag">Page 2 of 6</div>
+              <div class="paper-two-columns">
+                <div class="paper-column">
+                  <p class="paper-para">
+                    Given these post-harvest hurdles, leveraging Deep Learning (DL) architectures presents a viable solution for the Philippine agricultural sector. By utilizing Convolutional Neural Networks (CNNs), the speed and accuracy of quality control can be significantly enhanced, replacing the error-prone and labor-intensive traditional manual sorting. This research explores the potential of high-efficiency models, specifically EfficientNet-B0 and MobileNetV2, to provide a rapid, automated, and accessible means of dragon fruit classification. Implementing such technology not only preserves the economic value of the harvest but also supports the sustainability of local dragon fruit farming amidst the challenging climatic conditions of the country.
+                  </p>
+                  <p class="paper-para">
+                    In this study, the researcher aims to develop an automated classification system capable of accurately distinguishing between Healthy and Rotten Dragon Fruit images. To achieve high precision while maintaining computational efficiency, the researcher leveraged transfer learning using two state-of-the-art Convolutional Neural Network (CNN) architectures: EfficientNet-B0 and MobileNetV2. These models were chosen for their balanced performance in feature extraction and speed, which are critical for real-time agricultural applications.
+                  </p>
+                </div>
+                <div class="paper-column">
+                  <p class="paper-para">
+                    The models were trained and fine-tuned on a custom dataset consisting of dragon fruit images categorized into healthy and rotten classes. To ensure the robustness of the system, Data Augmentation techniques, such as rotation, zooming, and horizontal flipping, were employed to enrich the dataset, enhance the models' generalization capabilities, and prevent overfitting. Additionally, Early Stopping and Model Checkpointing were implemented during the training phase to preserve the most optimal weights and prevent unnecessary computational overhead.
+                  </p>
+                  <p class="paper-para">
+                    Through this research, the researcher evaluates the models using standard classification metrics, including Accuracy, Precision, Recall, and F1-score, alongside the analysis of Confusion Matrices. This evaluation aims to determine the most effective approach for dragon fruit quality assessment. Through this research, the researcher seeks not only to achieve high performance in fruit classification but also to provide a comparative analysis of model behaviors, proposing a scalable solution for local farmers and retailers in the Philippines to minimize post-harvest losses.
+                  </p>
+                  
+                  <h3 class="paper-section-heading">II. Literature Review</h3>
+                  <p class="paper-para">
+                    The classification of dragon fruit varieties can be effectively achieved by analyzing morphological properties through a multi-class classification approach. Research has shown that utilizing deep learning to evaluate physical characteristics allows for a more objective and sustainable method of variety identification compared to manual inspection, which is critical for maintaining quality control within the agricultural supply chain [1].
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- PAGE 3 -->
+            <div class="pdf-page-sheet" data-page="3">
+              <div class="pdf-page-number-tag">Page 3 of 6</div>
+              <div class="paper-two-columns">
+                <div class="paper-column">
+                  <p class="paper-para">
+                    Furthermore, the broader application of fruit classification and detection has been explored using various deep learning frameworks. Systems capable of identifying multiple fruit types within complex backgrounds and fluctuating lighting conditions demonstrate that Convolutional Neural Networks (CNNs) significantly outperform traditional image processing techniques, offering a robust solution for automated sorting environments [2].
+                  </p>
+                  <p class="paper-para">
+                    In terms of model architecture, the performance of EfficientNet-B0 has been evaluated for its ability to distinguish between complex image patterns, such as those found in AI-generated versus real imagery. Through the application of transfer learning, it was found that this model accurately detects synthetic patterns that are often imperceptible to humans, highlighting its versatility in handling sophisticated classification tasks [3].
+                  </p>
+                  <p class="paper-para">
+                    For real-time applications, particularly on mobile or edge devices, the MobileNetV2 architecture combined with deep transfer learning has proven to be a highly effective solution. This approach prioritizes computational efficiency without sacrificing accuracy, making it ideal for agricultural environments where high-powered computing resources may be unavailable [4].
+                  </p>
+                  <p class="paper-para">
+                    A specialized approach for dragon fruit involves not only classifying ripeness but also ensuring model interpretability. By integrating Grad-CAM (Gradient-weighted Class Activation Mapping), researchers have been able to provide visual explanations of the model’s predictions, highlighting the specific areas of the fruit skin that indicate ripeness to the user [5].
+                  </p>
+                </div>
+                <div class="paper-column">
+                  <p class="paper-para">
+                    The current state of image-based fruit ripeness identification continues to evolve, with a wide range of models being developed from standard CNNs to advanced architectures. Reviews of these methodologies identify persistent challenges, such as the need for larger, high-quality datasets, which serves as a roadmap for future developments in smart farming and post-harvest automation [6].
+                  </p>
+                  <p class="paper-para">
+                    Finally, comparative analyses of prominent models like EfficientNet-B0 and MobileNetV2 suggest that while deeper models provide significant power, EfficientNet-B0 often offers a superior balance of speed and accuracy. Such benchmarking is essential for selecting the most efficient candidate for real-time monitoring and classification tasks in various fields [7].
+                  </p>
+                  
+                  <h3 class="paper-section-heading">III. Methodology</h3>
+                  <p class="paper-para">
+                    This study aims to develop a binary image classification model capable of accurately distinguishing between healthy and rotten dragon fruit images. To achieve this, Transfer Learning with pretrained Convolutional Neural Networks (CNNs) was employed. The overall methodology involves several key stages: model selection, dataset preparation, data augmentation and modification, training setup, and evaluation.
+                  </p>
+                  <h4 class="paper-subsection-heading">1. Model Description</h4>
+                  <p class="paper-para">
+                    <strong>EfficientNet-B0:</strong> is the baseline model of the EfficientNet family, introduced by Google researchers who proposed a novel scaling method called compound scaling. Unlike traditional models that scale depth, width, or resolution independently, EfficientNet scales all three dimensions uniformly using a set of fixed coefficients. This results in a model that is significantly smaller and faster while achieving better accuracy than previous architectures like ResNet or Inception. The core of EfficientNet-B0 is the MBConv block (Mobile Inverted Bottleneck Convolution), which utilizes depthwise separable convolutions and squeeze-and-excitation modules to focus on the most relevant features of the fruit, such as texture and color changes indicating rot.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- PAGE 4 -->
+            <div class="pdf-page-sheet" data-page="4">
+              <div class="pdf-page-number-tag">Page 4 of 6</div>
+              <div class="paper-two-columns">
+                <div class="paper-column">
+                  <p class="paper-para">
+                    <strong>MobileNetV2:</strong> released in 2018, builds upon the foundation of its predecessor with several key architectural improvements designed to enhance both performance and efficiency [4]. The primary advancement is the introduction of the inverted residual block with linear bottlenecks. Unlike traditional residual blocks that expand and contract feature representations, MobileNetV2 starts with a narrow input, expands it into a higher-dimensional space using a 1×1 convolution, applies depthwise convolution to capture spatial features, and then projects it back down to the original dimension with another 1×1 convolution, without applying a non-linear activation in the final step. This linear bottleneck design helps preserve essential information during projection, reducing feature loss. Additionally, when the input and output dimensions match, residual connections are added to promote better gradient flow and feature reuse.
+                  </p>
+                  <h4 class="paper-subsection-heading">2. Development Environment</h4>
+                  <p class="paper-para">
+                    The experimentation and model development in this study were conducted using Python as the primary programming language, chosen for its robust ecosystem in machine learning. The models were built, trained, and evaluated using Keras with a TensorFlow backend, providing a high-level interface for modular deep learning development. Unlike traditional local setups, all processes were executed using Google Colab, a cloud-based development environment. This platform was selected because it provides access to high-performance Graphics Processing Units (GPUs), which significantly accelerated the training of deep architectures. Data management was facilitated through Google Drive integration, ensuring that the dataset and trained model files were securely stored and easily accessible.
+                  </p>
+                </div>
+                <div class="paper-column">
+                  <h4 class="paper-subsection-heading">3. Dataset and Preprocessing</h4>
+                  <p class="paper-para">
+                    The dataset used in this study comprises a total of 3,337 images, meticulously categorized into two primary classes: Healthy and Rotten. The data was gathered from two main sources to ensure both high-quality diversity and local relevance. Local Data was collected to capture real-world field conditions, while Internet Data (sourced from Kaggle and web repositories) provided a large-scale variety of decay patterns and lighting environments.
+                  </p>
+                  
+                  <h5 class="paper-table-title">Table 1: Distribution of Dragon Fruit Images</h5>
+                  <table class="paper-academic-table">
+                    <thead>
+                      <tr>
+                        <th>Source</th>
+                        <th>Healthy Images</th>
+                        <th>Rotten Images</th>
+                        <th>Sub-total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td style="font-weight: bold;">Local Data</td>
+                        <td>520</td>
+                        <td>444</td>
+                        <td style="font-weight: bold;">964</td>
+                      </tr>
+                      <tr>
+                        <td style="font-weight: bold;">Internet Data (Kaggle/Web)</td>
+                        <td>1,219</td>
+                        <td>1,154</td>
+                        <td style="font-weight: bold;">2,373</td>
+                      </tr>
+                      <tr class="table-total-row">
+                        <td>Total</td>
+                        <td>1,739</td>
+                        <td>1,598</td>
+                        <td>3,337</td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <h4 class="paper-subsection-heading">Image Standardization</h4>
+                  <p class="paper-para">
+                    To ensure compatibility with the selected convolutional neural network architectures, specifically EfficientNet-B0 and MobileNetV2, all images were resized to 224×224 pixels. This resizing process standardizes the spatial dimensions of the input data, ensuring consistent feature extraction across different model depths.
+                  </p>
+                  <h4 class="paper-subsection-heading">Data Augmentation and Normalization</h4>
+                  <p class="paper-para">
+                    To improve the models' ability to generalize and to prevent overfitting, several Data Augmentation techniques were applied. These techniques simulate various environmental conditions (e.g., shadows, different camera angles, and lighting) that the system might encounter in actual agricultural settings. The following techniques were used:
+                  </p>
+                  <ul class="paper-list">
+                    <li>Spatial Transformations: Random Rotation, Random Horizontal and Vertical Flipping, and Random Zooming.</li>
+                    <li>Visual Adjustments: Random Contrast and Brightness Adjustments, and Random Cropping.</li>
+                  </ul>
+                  <p class="paper-para" style="margin-top: 0.5rem;">
+                    Pixel values were normalized using the specific requirements of each architecture: EfficientNet scaling (keeping values within the 0-255 range but adjusting for mean/std) and MobileNetV2 scaling (rescaling pixels to the -1 to 1 range).
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- PAGE 5 -->
+            <div class="pdf-page-sheet" data-page="5">
+              <div class="pdf-page-number-tag">Page 5 of 6</div>
+              <div class="paper-two-columns">
+                <div class="paper-column">
+                  <h4 class="paper-subsection-heading">Data Partitioning</h4>
+                  <p class="paper-para">
+                    The dataset was divided using an 80-10-10 split:
+                  </p>
+                  <ul class="paper-list">
+                    <li>70% Training Set: Used to update model weights (Augmentation was applied only to this set to enhance generalization).</li>
+                    <li>15% Validation Set: Used for hyperparameter tuning and monitoring for early stopping.</li>
+                    <li>15% Testing Set: Kept "clean" (unaugmented) to provide an unbiased evaluation of the final model's performance.</li>
+                  </ul>
+                  
+                  <h4 class="paper-subsection-heading">4. Training Setup</h4>
+                  <p class="paper-para">
+                    The models were trained with the hyperparameters and configurations shown in Table 2:
+                  </p>
+                  
+                  <h5 class="paper-table-title">Table 2: Hyperparameters and Configurations</h5>
+                  <table class="paper-academic-table">
+                    <thead>
+                      <tr>
+                        <th>Hyperparameter</th>
+                        <th>Configuration</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Optimizer</td>
+                        <td>Adam</td>
+                      </tr>
+                      <tr>
+                        <td>Initial Learning Rate</td>
+                        <td>0.001 (Head Training)</td>
+                      </tr>
+                      <tr>
+                        <td>Fine-tuning Learning Rate</td>
+                        <td>0.00001</td>
+                      </tr>
+                      <tr>
+                        <td>Loss Function</td>
+                        <td>Binary Cross-Entropy</td>
+                      </tr>
+                      <tr>
+                        <td>Batch Size</td>
+                        <td>32</td>
+                      </tr>
+                      <tr>
+                        <td>Epochs</td>
+                        <td>10 (Initial) + 15 (Fine-tuning)</td>
+                      </tr>
+                      <tr>
+                        <td>Activation (Output)</td>
+                        <td>Sigmoid</td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <h4 class="paper-subsection-heading">Custom Classifier Architecture</h4>
+                  <p class="paper-para">
+                    The custom classifier was structured to balance complexity and regularization to mitigate overfitting. Table 3 details the layers added to the pretrained backbones.
+                  </p>
+                </div>
+                <div class="paper-column">
+                  <h5 class="paper-table-title">Table 3: Custom Classifier Structure</h5>
+                  <table class="paper-academic-table">
+                    <thead>
+                      <tr>
+                        <th>Layer</th>
+                        <th>Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Global Average Pooling</td>
+                        <td>Reduces feature maps to a 1D vector</td>
+                      </tr>
+                      <tr>
+                        <td>Batch Normalization</td>
+                        <td>Stabilizes learning and accelerates convergence</td>
+                      </tr>
+                      <tr>
+                        <td>Dropout (0.2 - 0.5)</td>
+                        <td>Prevents overfitting by randomly deactivating neurons</td>
+                      </tr>
+                      <tr>
+                        <td>Dense (Output)</td>
+                        <td>1 Unit with Sigmoid activation for binary classification</td>
+                      </tr>
+                    </tbody>
+                  </table>
+
+                  <h4 class="paper-subsection-heading">Fine-Tuning Strategy</h4>
+                  <p class="paper-para">
+                    Initially, the convolutional base of each model was frozen. Fine-tuning was later applied by unfreezing the upper layers to adapt the models to the dragon fruit dataset:
+                  </p>
+                  <ul class="paper-list">
+                    <li>EfficientNet-B0: All layers unfrozen for full base adaptation.</li>
+                    <li>MobileNetV2: Last 50 layers unfrozen to refine high-level features.</li>
+                  </ul>
+                  <p class="paper-para" style="margin-top: 0.5rem;">
+                    This fine-tuning strategy allowed the models to leverage existing pre-trained knowledge while adapting to the unique features of dragon fruit decay.
+                  </p>
+
+                  <h4 class="paper-subsection-heading">5. Evaluation Metrics</h4>
+                  <p class="paper-para">
+                    To evaluate the models' performance in classifying Healthy and Rotten dragon fruits, standard metrics were used: Accuracy, Precision, Recall, and F1 Score.
+                  </p>
+                  <p class="paper-para">
+                    <strong>Accuracy</strong> represents the proportion of correct predictions (both true positives and true negatives) out of the total predictions. It provides a general performance overview.
+                  </p>
+                  <p class="paper-para">
+                    <strong>Precision</strong> measures the reliability of positive predictions by calculating the ratio of true positives to all samples predicted as positive, evaluating the model's ability to avoid false positives.
+                  </p>
+                  <p class="paper-para">
+                    <strong>Recall</strong>, or sensitivity, evaluates the model’s ability to correctly identify all relevant positive instances, offering insight into the capacity to minimize false negatives.
+                  </p>
+                  <p class="paper-para">
+                    <strong>F1 Score</strong> combines Precision and Recall into a single metric by calculating their harmonic mean, which is highly beneficial for imbalanced agricultural datasets.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <!-- PAGE 6 -->
+            <div class="pdf-page-sheet" data-page="6">
+              <div class="pdf-page-number-tag">Page 6 of 6</div>
+              <div class="paper-two-columns">
+                <div class="paper-column">
+                  <h3 class="paper-section-heading">IV. Results and Discussion</h3>
+                  <p class="paper-para">
+                    This section presents the training and evaluation results of the two models: EfficientNet-B0 and MobileNetV2. Each model's performance is evaluated based on Accuracy, Loss, and its ability to handle out-of-distribution (Unknown) objects.
+                  </p>
+                  <h4 class="paper-subsection-heading">a. EfficientNet-B0</h4>
+                  <p class="paper-para">
+                    EfficientNet-B0 demonstrated exceptional performance on our testing dataset. Table 4 summarizes the key performance metrics achieved.
+                  </p>
+                  <h5 class="paper-table-title">Table 4: EfficientNet-B0 Performance Results</h5>
+                  <table class="paper-academic-table">
+                    <thead>
+                      <tr>
+                        <th>Metric</th>
+                        <th>Healthy Class</th>
+                        <th>Rotten Class</th>
+                        <th>Weighted Avg</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Precision</td>
+                        <td>0.98</td>
+                        <td>0.98</td>
+                        <td>0.98</td>
+                      </tr>
+                      <tr>
+                        <td>Recall</td>
+                        <td>0.97</td>
+                        <td>0.99</td>
+                        <td>0.98</td>
+                      </tr>
+                      <tr>
+                        <td>F1-Score</td>
+                        <td>0.97</td>
+                        <td>0.98</td>
+                        <td>0.98</td>
+                      </tr>
+                      <tr class="table-total-row">
+                        <td>Accuracy</td>
+                        <td colspan="3" style="text-align: center; font-weight: bold; color: #2e7d32;">98.49%</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <p class="paper-para" style="margin-top: 0.5rem;">
+                    The classification results for EfficientNet-B0 reveal an exceptionally high level of performance, with an overall accuracy of 98.49% across 687 test samples. The model demonstrates near-perfect consistency, achieving a precision of 0.98 for both classes, indicating a very low rate of false positives. Furthermore, the recall scores (0.97 for Healthy and 0.99 for Rotten) signify the model's high sensitivity.
+                  </p>
+                </div>
+                <div class="paper-column">
+                  <p class="paper-para">
+                    The F1-score, which serves as the harmonic mean of precision and recall, sits at 0.97 and 0.98 for the respective classes. These balanced metrics are crucial for agricultural applications, as they ensure the system is equally reliable at certifying healthy fruit for sale and flagging diseased fruit for removal. With a weighted average F1-score of 0.98, EfficientNet-B0 proves to be a robust architecture for dragon fruit quality detection.
+                  </p>
+                  
+                  <!-- Confusion Matrix academic visual -->
+                  <h5 class="paper-table-title">Figure 1: EfficientNet-B0 Confusion Matrix</h5>
+                  <div class="paper-confusion-matrix-container">
+                    <table class="confusion-matrix-table">
+                      <thead>
+                        <tr>
+                          <th colspan="2" rowspan="2" class="matrix-empty-cell"></th>
+                          <th colspan="2" class="matrix-header-title">Predicted Class</th>
+                        </tr>
+                        <tr class="matrix-sub-headers">
+                          <th>Healthy</th>
+                          <th>Rotten</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr>
+                          <th rowspan="2" class="matrix-actual-title"><div class="rotate-text">Actual</div></th>
+                          <th class="matrix-class-label">Healthy</th>
+                          <td class="matrix-cell hit"><strong>253</strong><span class="cell-percentage">(TN: 96.6%)</span></td>
+                          <td class="matrix-cell miss"><strong>9</strong><span class="cell-percentage">(FP: 3.4%)</span></td>
+                        </tr>
+                        <tr>
+                          <th class="matrix-class-label">Rotten</th>
+                          <td class="matrix-cell miss"><strong>5</strong><span class="cell-percentage">(FN: 1.2%)</span></td>
+                          <td class="matrix-cell hit"><strong>420</strong><span class="cell-percentage">(TP: 98.8%)</span></td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  <p class="paper-para" style="margin-top: 0.75rem;">
+                    The Confusion Matrix highlights the model's high reliability in identifying rot, as it only misclassified 5 rotten samples as healthy (False Negatives). Conversely, only 9 healthy samples were incorrectly flagged as rotten (False Positives). The low number of False Negatives suggests that the model is highly effective at preventing contaminated or decaying fruit from reaching consumers. Meanwhile, the minimal False Positive rate ensures that healthy produce is not unnecessarily wasted.
+                  </p>
+                </div>
+              </div>
+            </div>
+            
+          </div>
+
+        </div>
+      </div>
+    </main>
+
+    <!-- Unified Consistent Footer -->
+    <footer>
+      <div class="footer-container">
+        <p>Dragonfruit Variety Classification Neural Suite • CS Final Project</p>
+        <p style="margin-top: 0.2rem; font-size: 0.7rem; opacity: 0.6;">
+          Designed & coded by <a href="#">Ceile Marie Guce</a>. Powered by EfficientNetB0 & MobileNetV2.
+        </p>
+      </div>
+    </footer>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
