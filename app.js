@@ -43,6 +43,8 @@ document.addEventListener('DOMContentLoaded', () => {
   // --- SCREEN 2: ANALYZE DASHBOARD UPLOADS ---
   const API_URL = 'http://127.0.0.1:5000/analyze';
   const API_PREDICT_URL = 'http://127.0.0.1:5000/predict';
+  const API_POINTER_URL = 'http://127.0.0.1:5000/pointer_overlay';
+  const API_HEALTH_URL = 'http://127.0.0.1:5000/health';
   const dragDropArea = document.getElementById('drag-drop-area');
   const dashboardFileUpload = document.getElementById('dashboard-file-upload');
 
@@ -102,7 +104,9 @@ document.addEventListener('DOMContentLoaded', () => {
   let lastUploadedFile = null;
   let lastPointerPoint = { x: 50, y: 50 };
   let focusDebounceTimer = null;
+  let pointerOverlayTimer = null;
   let focusRequestSeq = 0;
+  let backendReadyPromise = null;
 
   function setAnalyzeTheme(statusKey) {
     const config = statusConfig[statusKey] || statusConfig.unknown;
@@ -294,6 +298,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   async function requestFocusedPrediction(point) {
     if (!lastUploadedFile) return;
+    await waitForBackendReady();
     const requestId = ++focusRequestSeq;
     try {
       const formData = new FormData();
@@ -313,6 +318,40 @@ document.addEventListener('DOMContentLoaded', () => {
       applyFocusedResponse(data);
     } catch (error) {
       console.error('Focused analysis error:', error);
+    }
+  }
+
+  async function requestPointerOverlay(point) {
+    if (!lastUploadedFile) return;
+    try {
+      await waitForBackendReady();
+      const formData = new FormData();
+      formData.append('focus_x', String(Number(point?.x) || 50));
+      formData.append('focus_y', String(Number(point?.y) || 50));
+      const response = await fetchWithRetry(API_POINTER_URL, { method: 'POST', body: formData }, 1);
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Pointer overlay failed.');
+      }
+      // Apply pointer overlay on the pointer box by compositing it over the base
+      const pointerBox = document.getElementById('pointer-box');
+      if (pointerBox) {
+        // Preserve existing base background (assumed to be the base image)
+        let base = pointerBox.style.backgroundImage || '';
+        // If base is empty but we have a known image source, fall back to current computed style
+        if (!base) {
+          const cs = getComputedStyle(pointerBox);
+          base = cs.backgroundImage || '';
+        }
+        // Compose overlay on top of base (CSS supports comma-separated backgrounds)
+        pointerBox.style.backgroundImage = `url("${data.pointer_overlay}"), ${base}`;
+        pointerBox.style.backgroundSize = 'cover, cover';
+        pointerBox.style.backgroundPosition = 'center, center';
+        pointerBox.style.backgroundRepeat = 'no-repeat, no-repeat';
+      }
+    } catch (err) {
+      // non-fatal: pointer overlay is best-effort
+      // console.debug('pointer overlay error', err);
     }
   }
 
@@ -341,18 +380,53 @@ document.addEventListener('DOMContentLoaded', () => {
     throw lastErr;
   }
 
+  async function waitForBackendReady(maxAttempts = 20, delayMs = 500) {
+    if (backendReadyPromise) {
+      return backendReadyPromise;
+    }
+
+    backendReadyPromise = (async () => {
+      let lastErr = null;
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          const response = await fetch(API_HEALTH_URL, { method: 'GET', cache: 'no-store' });
+          if (!response.ok) {
+            throw new Error(`health ${response.status}`);
+          }
+          const data = await response.json();
+          if (data && data.status === 'online') {
+            return true;
+          }
+          lastErr = new Error('backend offline');
+        } catch (err) {
+          lastErr = err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+      }
+      throw new Error('Backend is not ready yet. Start the Flask server first.');
+    })();
+
+    try {
+      return await backendReadyPromise;
+    } finally {
+      backendReadyPromise = null;
+    }
+  }
+
   function scheduleFocusedPrediction(point) {
     lastPointerPoint = {
       x: Number(point?.x) || 50,
       y: Number(point?.y) || 50,
     };
-    if (focusDebounceTimer) {
-      clearTimeout(focusDebounceTimer);
-    }
-    // Reduce debounce for snappier UI while still throttling rapid pointer moves
+    // Fast pointer overlay updates (low-cost, no model run)
+    if (pointerOverlayTimer) clearTimeout(pointerOverlayTimer);
+    pointerOverlayTimer = setTimeout(() => requestPointerOverlay(lastPointerPoint), 40);
+
+    // Debounced heavy focused prediction (model + GradCAM) — keep slightly slower
+    if (focusDebounceTimer) clearTimeout(focusDebounceTimer);
     focusDebounceTimer = setTimeout(() => {
       requestFocusedPrediction(lastPointerPoint);
-    }, 120);
+    }, 220);
   }
 
   // Pointer rendering removed - pointers are now drawn on images in Python backend
@@ -688,6 +762,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const loadingOverlay = document.getElementById('analyze-loading-overlay');
     try {
+      await waitForBackendReady();
       if (loadingOverlay) {
         loadingOverlay.style.display = 'flex';
         loadingOverlay.setAttribute('aria-hidden', 'false');
@@ -736,7 +811,7 @@ document.addEventListener('DOMContentLoaded', () => {
         loadingOverlay.style.pointerEvents = 'none';
       }
       // Show error message instead of fallback - GradCAM should be handled by Python backend
-      alert('Backend analysis failed: ' + (error.message || 'Unknown error'));
+      alert((error.message || 'Backend is not ready yet.') + ' Please start/restart the Flask server and try again.');
       console.error('Analysis error:', error);
     }
   }

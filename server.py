@@ -55,6 +55,7 @@ model                = None
 tf_module            = None
 input_size           = (224, 224)
 last_conv_layer_name = None
+LAST_DISPLAY_IMAGE    = None
 
 # Runtime config exposed to the frontend
 RUNTIME_CONFIG = {
@@ -748,6 +749,13 @@ def _run_model_analysis(file_storage):
         print(f"[INFERENCE] {predicted_class.upper()} | "
               f"{confidence*100:.2f}% | {inf_ms:.0f}ms | {decision_reason[:80]}")
 
+        # Cache the last display image so pointer-only overlays can be generated
+        try:
+            global LAST_DISPLAY_IMAGE
+            LAST_DISPLAY_IMAGE = display_image.copy()
+        except Exception:
+            LAST_DISPLAY_IMAGE = None
+
         return {
             "success":True,
             "prediction":predicted_class,
@@ -914,6 +922,32 @@ def analyze():
     result,err=_run_model_analysis(file_storage)
     if err: return err
     return jsonify(result)
+
+
+@app.route('/pointer_overlay', methods=['POST'])
+def pointer_overlay():
+    """Return a small transparent pointer-only overlay (PNG data-url) for
+    the currently cached display image. This avoids re-running the full
+    model/GradCAM on every pointer move and keeps UI responsive.
+    Expects form fields: `focus_x`, `focus_y` (0-100).
+    """
+    global LAST_DISPLAY_IMAGE
+    if LAST_DISPLAY_IMAGE is None:
+        return jsonify({'success': False, 'error': 'No cached image; run analyze first.'}), 400
+
+    focus_x = request.form.get('focus_x')
+    focus_y = request.form.get('focus_y')
+    if focus_x is None or focus_y is None:
+        return jsonify({'success': False, 'error': 'Missing focus_x or focus_y.'}), 400
+
+    try:
+        fx = float(focus_x)
+        fy = float(focus_y)
+        focus_points = [ { 'x': fx, 'y': fy, 'score': 1.0 } ]
+        overlay = _render_pointer_overlay(LAST_DISPLAY_IMAGE.size, focus_points)
+        return jsonify({ 'success': True, 'pointer_overlay': _to_data_url(overlay), 'focus_points': focus_points })
+    except Exception as exc:
+        return jsonify({ 'success': False, 'error': str(exc) }), 500
 
 @app.route("/predict", methods=["POST"])
 def predict():
