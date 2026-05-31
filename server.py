@@ -5,6 +5,7 @@ import time
 import numpy as np
 from flask import Flask, jsonify, request
 from flask_cors import CORS
+from werkzeug.datastructures import FileStorage
 from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 # Guard cv2 import — give clear error if not installed
@@ -877,13 +878,77 @@ def reload_model():
 
 @app.route("/analyze", methods=["POST"])
 def analyze():
-    result,err=_run_model_analysis(request.files.get("file"))
+    # Support optional focus crop via form fields: focus_x, focus_y (0-100), crop_pct (0-100)
+    file_storage = request.files.get("file")
+    focus_x = request.form.get('focus_x')
+    focus_y = request.form.get('focus_y')
+    crop_pct = request.form.get('crop_pct')
+    if file_storage and (focus_x is not None or focus_y is not None):
+        try:
+            fx = float(focus_x) if focus_x is not None else 50.0
+            fy = float(focus_y) if focus_y is not None else 50.0
+            cp = float(crop_pct) if crop_pct is not None else 30.0
+            # create cropped FileStorage
+            file_storage.stream.seek(0)
+            from PIL import Image
+            img = Image.open(file_storage.stream)
+            img = ImageOps.exif_transpose(img)
+            W, H = img.size
+            # crop size as fraction of min dimension
+            frac = max(0.05, min(0.95, cp / 100.0))
+            box_w = int(min(W, H) * frac)
+            box_h = box_w
+            cx = int((fx / 100.0) * W)
+            cy = int((fy / 100.0) * H)
+            left = max(0, cx - box_w // 2)
+            upper = max(0, cy - box_h // 2)
+            right = min(W, left + box_w)
+            lower = min(H, upper + box_h)
+            cropped = img.crop((left, upper, right, lower))
+            buf = io.BytesIO()
+            cropped.save(buf, format='PNG')
+            buf.seek(0)
+            file_storage = FileStorage(stream=buf, filename='crop.png', content_type='image/png')
+        except Exception as e:
+            print(f"[WARN] Could not create crop: {e}")
+    result,err=_run_model_analysis(file_storage)
     if err: return err
     return jsonify(result)
 
 @app.route("/predict", methods=["POST"])
 def predict():
-    result,err=_run_model_analysis(request.files.get("file"))
+    # Same behavior as /analyze but allow focused crop to be requested by frontend
+    file_storage = request.files.get("file")
+    focus_x = request.form.get('focus_x')
+    focus_y = request.form.get('focus_y')
+    crop_pct = request.form.get('crop_pct')
+    if file_storage and (focus_x is not None or focus_y is not None):
+        try:
+            fx = float(focus_x) if focus_x is not None else 50.0
+            fy = float(focus_y) if focus_y is not None else 50.0
+            cp = float(crop_pct) if crop_pct is not None else 30.0
+            file_storage.stream.seek(0)
+            from PIL import Image
+            img = Image.open(file_storage.stream)
+            img = ImageOps.exif_transpose(img)
+            W, H = img.size
+            frac = max(0.05, min(0.95, cp / 100.0))
+            box_w = int(min(W, H) * frac)
+            box_h = box_w
+            cx = int((fx / 100.0) * W)
+            cy = int((fy / 100.0) * H)
+            left = max(0, cx - box_w // 2)
+            upper = max(0, cy - box_h // 2)
+            right = min(W, left + box_w)
+            lower = min(H, upper + box_h)
+            cropped = img.crop((left, upper, right, lower))
+            buf = io.BytesIO()
+            cropped.save(buf, format='PNG')
+            buf.seek(0)
+            file_storage = FileStorage(stream=buf, filename='crop.png', content_type='image/png')
+        except Exception as e:
+            print(f"[WARN] Could not create crop: {e}")
+    result,err=_run_model_analysis(file_storage)
     if err: return err
     return jsonify(result)
 
