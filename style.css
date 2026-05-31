@@ -451,15 +451,21 @@ body[data-page="research"] #nav-btn-research {
   color: rgba(255, 255, 255, 0.6);
 }
 
-/* 3-Column Image display grid */
-.image-grid-3col {
+/* 4-Column Image display grid */
+.image-grid-4col {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 1.25rem;
 }
 
+@media (max-width: 1100px) {
+  .image-grid-4col {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 768px) {
-  .image-grid-3col {
+  .image-grid-4col {
     grid-template-columns: 1fr;
   }
 }

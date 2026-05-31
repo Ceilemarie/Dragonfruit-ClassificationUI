@@ -136,8 +136,8 @@
             </div>
           </div>
 
-          <!-- 3-Column Visual Processing Grid -->
-          <div class="image-grid-3col">
+          <!-- 4-Column Visual Processing Grid -->
+          <div class="image-grid-4col">
             <!-- 1. Original Photo -->
             <div class="grid-card">
               <div class="card-image-box" id="original-photo-box">
@@ -152,7 +152,15 @@
               <span class="card-label">Pointer</span>
             </div>
 
-            <!-- 3. Grad-CAM (pointers drawn in Python) -->
+            <!-- 3. Rainbow Heatmap -->
+            <div class="grid-card">
+              <div class="card-image-box heatmap-overlay-box">
+                <div class="heatmap-color-mask"></div>
+              </div>
+              <span class="card-label">Heatmap</span>
+            </div>
+
+            <!-- 4. Grad-CAM -->
             <div class="grid-card">
               <div class="card-image-box gradcam-overlay-box">
                 <div class="gradcam-color-mask"></div>

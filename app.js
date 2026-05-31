@@ -42,6 +42,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // --- SCREEN 2: ANALYZE DASHBOARD UPLOADS ---
   const API_URL = 'http://127.0.0.1:5000/analyze';
+  const API_PREDICT_URL = 'http://127.0.0.1:5000/predict';
   const dragDropArea = document.getElementById('drag-drop-area');
   const dashboardFileUpload = document.getElementById('dashboard-file-upload');
 
@@ -98,6 +99,10 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const transparentPixel = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+  let lastUploadedFile = null;
+  let lastPointerPoint = { x: 50, y: 50 };
+  let focusDebounceTimer = null;
+  let focusRequestSeq = 0;
 
   function setAnalyzeTheme(statusKey) {
     const config = statusConfig[statusKey] || statusConfig.unknown;
@@ -179,7 +184,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function installDraggablePointer(pointerBox, focusPoints = []) {
+  function installDraggablePointer(pointerBox, focusPoints = [], onChange = null, initialPoint = null) {
     if (!pointerBox) return;
 
     clearPointerLayer(pointerBox);
@@ -192,13 +197,19 @@ document.addEventListener('DOMContentLoaded', () => {
     pointer.setAttribute('aria-label', 'Draggable pointer');
     pointer.setAttribute('role', 'img');
 
-    const initialPoint = Array.isArray(focusPoints) && focusPoints.length > 0 ? focusPoints[0] : { x: 50, y: 50 };
-    let posX = Number(initialPoint.x) || 50;
-    let posY = Number(initialPoint.y) || 50;
+    const pointSeed = initialPoint || (Array.isArray(focusPoints) && focusPoints.length > 0 ? focusPoints[0] : { x: 50, y: 50 });
+    let posX = Number(pointSeed.x) || 50;
+    let posY = Number(pointSeed.y) || 50;
 
     const applyPosition = () => {
       pointer.style.left = `${Math.max(0, Math.min(100, posX))}%`;
       pointer.style.top = `${Math.max(0, Math.min(100, posY))}%`;
+    };
+
+    const emitChange = () => {
+      if (typeof onChange === 'function') {
+        onChange({ x: posX, y: posY });
+      }
     };
 
     let dragging = false;
@@ -215,6 +226,7 @@ document.addEventListener('DOMContentLoaded', () => {
       posX = Math.max(0, Math.min(100, x));
       posY = Math.max(0, Math.min(100, y));
       applyPosition();
+      emitChange();
     };
 
     const onPointerMove = (event) => {
@@ -245,6 +257,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     applyPosition();
+    emitChange();
     layer.appendChild(pointer);
     pointerBox.appendChild(layer);
   }
@@ -255,7 +268,53 @@ document.addEventListener('DOMContentLoaded', () => {
     pointerBox.style.backgroundSize = 'cover';
     pointerBox.style.backgroundPosition = 'center';
     pointerBox.style.backgroundRepeat = 'no-repeat';
-    installDraggablePointer(pointerBox, focusPoints);
+    installDraggablePointer(pointerBox, focusPoints, scheduleFocusedPrediction, lastPointerPoint);
+  }
+
+  function applyFocusedResponse(data) {
+    setOverlayImage(document.querySelector('.heatmap-overlay-box .heatmap-color-mask'), data.heatmap_overlay || transparentPixel, 'normal');
+    setOverlayImage(document.querySelector('.gradcam-overlay-box .gradcam-color-mask'), data.gradcam_overlay || transparentPixel, 'normal');
+    data.class_names = data.class_names || ['healthy', 'rotten', 'unknown'];
+    setStatusState(data.prediction || 'unknown', data);
+  }
+
+  async function requestFocusedPrediction(point) {
+    if (!lastUploadedFile) return;
+    const requestId = ++focusRequestSeq;
+    try {
+      const formData = new FormData();
+      formData.append('file', lastUploadedFile);
+      formData.append('focus_x', String(Number(point?.x) || 50));
+      formData.append('focus_y', String(Number(point?.y) || 50));
+      formData.append('crop_pct', '55');
+
+      const response = await fetch(API_PREDICT_URL, {
+        method: 'POST',
+        body: formData,
+      });
+
+      const data = await response.json();
+      if (requestId !== focusRequestSeq) return;
+      if (!response.ok || !data.success) {
+        throw new Error(data.error || 'Focused inference failed.');
+      }
+      applyFocusedResponse(data);
+    } catch (error) {
+      console.error('Focused analysis error:', error);
+    }
+  }
+
+  function scheduleFocusedPrediction(point) {
+    lastPointerPoint = {
+      x: Number(point?.x) || 50,
+      y: Number(point?.y) || 50,
+    };
+    if (focusDebounceTimer) {
+      clearTimeout(focusDebounceTimer);
+    }
+    focusDebounceTimer = setTimeout(() => {
+      requestFocusedPrediction(lastPointerPoint);
+    }, 220);
   }
 
   // Pointer rendering removed - pointers are now drawn on images in Python backend
@@ -582,6 +641,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
+    lastUploadedFile = file;
     const previewUrl = await readFileAsDataUrl(file);
     setImageSources(previewUrl);
     setOverlayImage(document.querySelector('.heatmap-overlay-box .heatmap-color-mask'), transparentPixel, 'normal');
@@ -611,17 +671,19 @@ document.addEventListener('DOMContentLoaded', () => {
       const baseImage = data.display_image || previewUrl;
       setImageSources(baseImage);
       // show returned overlays with proper blend mode for clearer hotspots
+      setOverlayImage(document.querySelector('.heatmap-overlay-box .heatmap-color-mask'), data.heatmap_overlay || transparentPixel, 'normal');
       setOverlayImage(document.querySelector('.gradcam-overlay-box .gradcam-color-mask'), data.gradcam_overlay || transparentPixel, 'normal');
-      setOverlayImage(document.querySelector('.mini-visual-row .gradcam-overlay-box .gradcam-color-mask'), data.gradcam_overlay || transparentPixel, 'normal');
       // set pointer panel and install a draggable pointer marker
       const pointerBox = document.getElementById('pointer-box');
       if (pointerBox) {
+        lastPointerPoint = (Array.isArray(data.focus_points) && data.focus_points.length > 0)
+          ? { x: Number(data.focus_points[0].x) || 50, y: Number(data.focus_points[0].y) || 50 }
+          : { x: 50, y: 50 };
         renderPointerPanel(pointerBox, baseImage, data.focus_points || []);
       }
       // create or refresh the heatmap legend/explanation
       ensureHeatmapLegend();
-      data.class_names = data.class_names || ['healthy', 'rotten', 'unknown'];
-      setStatusState(data.prediction || 'unknown', data);
+      applyFocusedResponse(data);
       if (loadingOverlay) {
         loadingOverlay.style.display = 'none';
         loadingOverlay.setAttribute('aria-hidden', 'true');

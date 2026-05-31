@@ -887,7 +887,7 @@ def analyze():
         try:
             fx = float(focus_x) if focus_x is not None else 50.0
             fy = float(focus_y) if focus_y is not None else 50.0
-            cp = float(crop_pct) if crop_pct is not None else 30.0
+            cp = float(crop_pct) if crop_pct is not None else 55.0
             # create cropped FileStorage
             file_storage.stream.seek(0)
             from PIL import Image
@@ -926,7 +926,7 @@ def predict():
         try:
             fx = float(focus_x) if focus_x is not None else 50.0
             fy = float(focus_y) if focus_y is not None else 50.0
-            cp = float(crop_pct) if crop_pct is not None else 30.0
+            cp = float(crop_pct) if crop_pct is not None else 55.0
             file_storage.stream.seek(0)
             from PIL import Image
             img = Image.open(file_storage.stream)
