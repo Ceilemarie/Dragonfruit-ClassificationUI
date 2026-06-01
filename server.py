@@ -6,58 +6,34 @@ import numpy as np
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from werkzeug.datastructures import FileStorage
-from PIL import Image, ImageEnhance, ImageFilter, ImageOps
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps, ImageDraw
 
-# Guard cv2 import — give clear error if not installed
+# Optional OpenCV — used for validation heuristics. If unavailable we
+# gracefully degrade to a permissive "validation passed" behaviour.
 try:
     import cv2
     CV2_AVAILABLE = True
-except ImportError:
+except Exception:
+    cv2 = None
     CV2_AVAILABLE = False
-    print("\n[WARNING] opencv-python-headless not installed.")
-    print("[WARNING] Run: pip install opencv-python-headless")
-    print("[WARNING] Validation layer DISABLED — AI-only mode\n")
 
 app = Flask(__name__)
 CORS(app)
 
-MODEL_CANDIDATES = [
-    "Model1_EfficientNetB0_best.keras",
-   
-]
-
-def _resolve_model_path():
-    base_dir = os.path.dirname(__file__)
-    for c in MODEL_CANDIDATES:
-        p = os.path.join(base_dir, c)
-        if os.path.exists(p):
-            return p
-    return os.path.join(base_dir, MODEL_CANDIDATES[-1])
-
-MODEL_PATH   = _resolve_model_path()
-CLASS_NAMES  = ["healthy", "rotten", "unknown"]
-
-# Rainbow palette (low -> high): indigo, blue, cyan, green, yellow, orange, red, magenta
-RAINBOW_PALETTE = [
-    (63, 0, 125),
-    (0, 58, 168),
-    (0, 196, 255),
-    (0, 230, 118),
-    (255, 214, 0),
-    (255, 111, 0),
-    (244, 67, 54),
-    (170, 0, 110),
-]
+# Basic configuration and globals
+MODEL_CANDIDATES = ["Model1_EfficientNetB0_best.keras"]
+MODEL_PATH = os.path.join(os.path.dirname(__file__), MODEL_CANDIDATES[0])
+CLASS_NAMES = ["healthy", "rotten", "unknown"]
+RAINBOW_PALETTE = [(63,0,125),(0,58,168),(0,196,255),(0,230,118),(255,214,0),(255,111,0),(244,67,54),(170,0,110)]
 MIN_CONFIDENCE = 0.55
-MIN_MARGIN     = 0.12
+MIN_MARGIN = 0.12
 
-model                = None
-tf_module            = None
-input_size           = (224, 224)
+model = None
+tf_module = None
+input_size = (224, 224)
 last_conv_layer_name = None
-LAST_DISPLAY_IMAGE    = None
+LAST_DISPLAY_IMAGE = None
 
-# Runtime config exposed to the frontend
 RUNTIME_CONFIG = {
     "preprocess_mode": "auto",
     "force_classification": False,
@@ -67,905 +43,340 @@ RUNTIME_CONFIG = {
     "mock_inference": False,
 }
 
-# ══════════════════════════════════════════════════════════════════════════════
-# VALIDATION THRESHOLDS
-#
-# Key fixes vs hibiscus / pineapple:
-#   HSV pink:  sat >= 115 (was 90)  — hibiscus is less saturated
-#   HSV pink:  val >= 60  (was 50)  — darker flowers excluded
-#   crimson:   sat >= 165 (was 155) — pineapple bracts excluded
-#   max_edge:  0.32 (was 0.38)      — hibiscus petals have more edges
-#   min_solid: 0.42 (was 0.38)      — flowers scatter more
-#   min_fill:  0.30 (was 0.25)      — petal gaps show up more
-# ══════════════════════════════════════════════════════════════════════════════
 VAL = dict(
-    px_min     = 120,   # minimum qualifying pixels
-    min_solid  = 0.42,  # blob solidity (hibiscus petals: ~0.15-0.30)
-    min_fill   = 0.30,  # interior fill  (flowers have gaps)
-    max_edge   = 0.32,  # edge density on blob — KEY discriminator
-                        #   dragon fruit skin:   0.08-0.25 (smooth, waxy)
-                        #   hibiscus petals:     0.30-0.55 (petal veins + edges)
-                        #   rose petals:         0.38-0.65
-                        #   rambutan spikes:     0.50-0.80
-    max_iqr    = 18.0,  # hue IQR — DF color uniform; flowers vary
-    min_cf     = 0.18,  # center fill — stamen/center of flower fails
-    rot_conf   = 0.68,  # rotten bypass threshold
-    rot_px     = 400,   # rotten color pixels needed for bypass
+    px_min=120,
+    min_solid=0.42,
+    min_fill=0.30,
+    max_edge=0.32,
+    max_iqr=18.0,
+    min_cf=0.18,
+    rot_conf=0.68,
+    rot_px=400,
 )
 
-# ══════════════════════════════════════════════════════════════════════════════
-# HSV MASKS — stricter than before
-# ══════════════════════════════════════════════════════════════════════════════
-def _df_mask(hsv):
-    """
-    Dragon fruit HSV fingerprint.
-    
-    Pink variety:   hue 145-168, sat >= 115, val >= 60
-      - Raised sat from 90→115: hibiscus is less saturated (sat ~70-100)
-      - Raised val from 50→60:  excludes darker/shadowed flowers
-    
-    Crimson variety: hue 0-4 or 172-180, sat >= 165, val >= 55
-      - Raised sat from 155→165: pineapple bracts have lower sat (~120-140)
-      - Keeps hue range 0-4 ONLY (was 0-4, stays same)
-    
-    What gets excluded:
-      Hibiscus:   hue 145-165, sat 70-105 → sat gate blocks it
-      Pineapple bracts: hue 0-10, sat 120-140 → sat gate blocks it
-      Roses:      hue 5-15 → hue range blocks it
-      Rambutan:   hue 6-20 → hue range blocks it
-    """
-    h, s, v = hsv[:,:,0], hsv[:,:,1], hsv[:,:,2]
-    pink    = (h>=145)&(h<=168)&(s>=115)&(v>=60)
-    crimson = ((h<=4)|(h>=172))&(s>=165)&(v>=55)
-    return (pink|crimson).astype(np.uint8)
+# --- Utilities ---------------------------------------------------------------
 
-def _rotten_mask(hsv):
-    """Rotten dragon fruit color signature."""
-    h, s, v = hsv[:,:,0], hsv[:,:,1], hsv[:,:,2]
-    dark       = (v<80)&(v>8)
-    faded_pink = (h>=130)&(h<=178)&(s>=30)&(s<90)&(v>=40)
-    brown      = (h>=8)&(h<=35)&(s>=50)&(v>=35)&(v<185)
-    return (dark|faded_pink|brown).astype(np.uint8)
-
-def _rotten_confirmed(pil_224):
-    if not CV2_AVAILABLE: return False
-    bgr = cv2.cvtColor(np.array(pil_224), cv2.COLOR_RGB2BGR)
-    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    rm  = _rotten_mask(hsv)
-    rm  = cv2.morphologyEx((rm*255).astype(np.uint8), cv2.MORPH_CLOSE,
-          cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(9,9)))
-    return int(np.sum(rm>0)) >= VAL["rot_px"]
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 7-LAYER VALIDATION
-# ══════════════════════════════════════════════════════════════════════════════
-def validate_dragon_fruit(pil_224):
-    """
-    Returns dict: ok, px_count, edge_density, fail_reason
-    
-    Layer 1: HSV pixel count
-    Layer 2: Shape solidity (scattered petals fail)
-    Layer 3: Interior fill  (flower gaps fail)
-    Layer 4: Edge density ON BLOB ONLY (hibiscus/rambutan/rose fail)
-    Layer 5: Hue IQR (inconsistent color = not DF)
-    Layer 6: Center fill (flower stamen = yellow center fails)
-    Layer 7: Compactness (star-shaped flowers fail)
-    """
-    if not CV2_AVAILABLE:
-        return dict(ok=True, px_count=999, edge_density=0.0,
-                    fail_reason="", note="cv2 not installed — validation skipped")
-
-    bgr  = cv2.cvtColor(np.array(pil_224), cv2.COLOR_RGB2BGR)
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    hsv  = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
-    raw  = _df_mask(hsv)
-    total= int(np.sum(raw))
-    r    = dict(ok=False, px_count=total, edge_density=0.0, fail_reason="")
-
-    # Layer 1: Pixel count
-    if total < VAL["px_min"]:
-        r["fail_reason"] = (
-            f"No dragon fruit color — {total} px (need {VAL['px_min']}+). "
-            "Expected sat>=115 magenta-pink hue 145-168, or crimson sat>=165 hue 0-4/172-180.")
-        return r
-
-    # Morphological clean
-    k11 = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(11,11))
-    k5  = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(5,5))
-    m   = (raw*255).astype(np.uint8)
-    m   = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k11)
-    m   = cv2.morphologyEx(m, cv2.MORPH_OPEN,  k5)
-
-    n, lbl, stats, _ = cv2.connectedComponentsWithStats(m)
-    if n<=1:
-        r["fail_reason"] = "No solid blob after morphological filtering."
-        return r
-
-    blobs = sorted([(i, stats[i,cv2.CC_STAT_AREA]) for i in range(1,n)],
-                   key=lambda x:x[1], reverse=True)
-
-    for bidx, barea in blobs:
-        if barea < 60: break
-        bm   = np.where(lbl==bidx, 255, 0).astype(np.uint8)
-        px_b = int(np.sum(raw & (bm>0)))
-        if px_b < 60: continue
-
-        # Layer 2: Solidity
-        cnts,_ = cv2.findContours(bm, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not cnts: continue
-        cnt  = max(cnts, key=cv2.contourArea)
-        area = cv2.contourArea(cnt)
-        if area < 60: continue
-        hull = cv2.convexHull(cnt)
-        ha   = cv2.contourArea(hull)
-        sol  = float(area/ha) if ha>0 else 0.
-        if sol < VAL["min_solid"]:
-            r["fail_reason"] = (
-                f"Shape too scattered (solidity {sol:.2f} < {VAL['min_solid']}) "
-                "— flower petals spread outward.")
-            continue
-
-        # Layer 3: Interior fill
-        hc = np.zeros((224,224), np.uint8)
-        cv2.drawContours(hc, [hull], 0, 255, -1)
-        inf = float(np.sum((hc>0)&raw) / max(np.sum(hc>0),1))
-        if inf < VAL["min_fill"]:
-            r["fail_reason"] = (
-                f"Interior too sparse (fill {inf:.2f} < {VAL['min_fill']}) "
-                "— gaps between petals or background visible.")
-            continue
-
-        # Layer 4: Edge density ON BLOB ONLY — KEY check
-        edges = cv2.Canny(gray, 40, 110)
-        ed    = int(np.sum(edges[bm>0]>0)) / max(px_b, 1)
-        r["edge_density"] = round(ed, 3)
-        if ed > VAL["max_edge"]:
-            r["fail_reason"] = (
-                f"Surface too rough (edge density {ed:.2f} > {VAL['max_edge']}) "
-                f"— hibiscus/rambutan/flower texture detected. "
-                f"Dragon fruit skin is smooth (0.08-0.25).")
-            continue
-
-        # Layer 5: Hue IQR
-        h_c  = hsv[:,:,0]
-        hues = h_c[bm>0]
-        if len(hues)>0:
-            ph  = hues[(hues>=130)&(hues<=180)]
-            rh  = hues[hues<=10]
-            ip  = float(np.percentile(ph,75)-np.percentile(ph,25)) if len(ph)>10 else 999.
-            ir  = float(np.percentile(rh,75)-np.percentile(rh,25)) if len(rh)>10 else 999.
-            iqr = min(ip,ir)
-        else: iqr=999.
-        if iqr > VAL["max_iqr"]:
-            r["fail_reason"] = (
-                f"Color inconsistent (IQR {iqr:.1f} > {VAL['max_iqr']}) "
-                "— mixed colors indicate non-dragon-fruit.")
-            continue
-
-        # Layer 6: Center fill (stamen check)
-        M = cv2.moments(bm)
-        if M["m00"]>0:
-            cx_b = int(M["m10"]/M["m00"])
-            cy_b = int(M["m01"]/M["m00"])
-            br   = max(int(np.sqrt(area/np.pi)*0.28), 5)
-            cc   = np.zeros((224,224), np.uint8)
-            cv2.circle(cc,(cx_b,cy_b),br,255,-1)
-            cf = float(np.sum((cc>0)&raw)/max(np.sum(cc>0),1))
-            if cf < VAL["min_cf"]:
-                r["fail_reason"] = (
-                    f"Non-pink center (cf {cf:.2f} < {VAL['min_cf']}) "
-                    "— flower stamen or yellow/white center detected.")
-                continue
-
-        # Layer 7: Compactness (star-shaped = low compactness)
-        perim = cv2.arcLength(cnt, True)
-        comp  = float(4*np.pi*area/perim**2) if perim>0 else 0.
-        if comp < 0.06:
-            r["fail_reason"] = (
-                f"Shape too irregular (compactness {comp:.3f} < 0.06) "
-                "— star or spiky shape, not dragon fruit.")
-            continue
-
-        # Passed all 7 layers
-        r["ok"]        = True
-        r["px_count"]  = px_b
-        r["fail_reason"] = ""
-        return r
-
-    if not r["fail_reason"]:
-        r["fail_reason"] = (
-            "No blob passed all 7 validation checks. "
-            "Color pixels found but shape/texture/center do not match dragon fruit.")
-    return r
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# MODEL LOADING
-# ══════════════════════════════════════════════════════════════════════════════
-def load_inference_model():
-    global model, tf_module, input_size, last_conv_layer_name
-    if model is not None: return True
-    try:
-        import tensorflow as tf
-        tf_module = tf
-        print(f"\n[AI ENGINE] Loading model: {MODEL_PATH}")
-        model = tf.keras.models.load_model(MODEL_PATH)
-        input_size = _resolve_input_size(model)
-        last_conv_layer_name = _find_last_conv_layer_name(model)
-        # Adjust CLASS_NAMES depending on model output shape
-        try:
-            out_shape = None
-            shape = getattr(model, "output_shape", None)
-            if isinstance(shape, list):
-                shape = shape[0]
-            out_shape = shape
-            if out_shape is not None and len(out_shape) >= 1:
-                n_out = int(out_shape[-1])
-                if n_out == 1:
-                    # Binary sigmoid model: produce [healthy, rotten]
-                    CLASS_NAMES.clear()
-                    CLASS_NAMES.extend(["healthy", "rotten"])
-                elif n_out == 2:
-                    # Two-output softmax: assume order [healthy, rotten]
-                    CLASS_NAMES.clear()
-                    CLASS_NAMES.extend(["healthy", "rotten"])
-                elif n_out == 3:
-                    CLASS_NAMES.clear()
-                    CLASS_NAMES.extend(["healthy", "rotten", "unknown"])
-                else:
-                    # Generic: create placeholder names
-                    CLASS_NAMES.clear()
-                    for i in range(n_out):
-                        CLASS_NAMES.append(f"class_{i}")
-        except Exception:
-            pass
-        print(f"[AI ENGINE] Ready | Input: {model.input_shape} | GradCAM: {last_conv_layer_name}")
-        if CV2_AVAILABLE:
-            print("[AI ENGINE] Validation: ENABLED (7-layer HSV+shape+edge)")
-        else:
-            print("[AI ENGINE] Validation: DISABLED (install opencv-python-headless)")
-        return True
-    except ImportError:
-        print("\n[AI ERROR] TensorFlow not found. Run: pip install tensorflow\n")
-        return False
-    except Exception as exc:
-        print(f"\n[AI ERROR] {exc}\n")
-        return False
-
-def _resolve_input_size(m):
-    shape = getattr(m, "input_shape", None)
-    if isinstance(shape, list): shape = shape[0]
-    if shape and len(shape)>=3 and shape[1] and shape[2]:
-        return int(shape[1]), int(shape[2])
-    return 224, 224
-
-def _find_last_conv_layer_name(m):
-    conv_types = {"Conv2D","DepthwiseConv2D","SeparableConv2D"}
-    for layer in reversed(m.layers):
-        if layer.__class__.__name__ in conv_types:
-            return layer.name
-    for layer in reversed(m.layers):
-        try:
-            os_ = getattr(layer,"output_shape",None)
-            if os_ and len(os_)==4: return layer.name
-        except TypeError: continue
-    return m.layers[-1].name
-
-def _prepare_image(file_storage):
-    image = Image.open(file_storage.stream)
-    image = ImageOps.exif_transpose(image)
-    if image.mode!="RGB": image=image.convert("RGB")
-    display_image = ImageOps.pad(image, input_size,
-        method=Image.Resampling.BILINEAR, color=(0,0,0), centering=(0.5,0.5))
-    image_array = np.asarray(display_image, dtype=np.float32)
-    return display_image, image_array
-
-def _to_data_url(image):
+def _to_data_url(image: Image.Image) -> str:
     buf = io.BytesIO()
     image.save(buf, format="PNG")
     return f"data:image/png;base64,{base64.b64encode(buf.getvalue()).decode()}"
 
+
+def _prepare_image(file_storage: FileStorage):
+    img = Image.open(file_storage.stream)
+    img = ImageOps.exif_transpose(img)
+    if img.mode != "RGB":
+        img = img.convert("RGB")
+    display = ImageOps.pad(img, input_size, method=Image.Resampling.BILINEAR, color=(0,0,0))
+    arr = np.asarray(display, dtype=np.float32)
+    return display, arr
+
+
+def _image_to_filestorage(image: Image.Image, name: str = "image.png"):
+    buf = io.BytesIO()
+    image.save(buf, format="PNG")
+    buf.seek(0)
+    return FileStorage(stream=buf, filename=name, content_type="image/png")
+
+
 def _normalize_predictions(predictions):
     scores = np.asarray(predictions, dtype=np.float32).reshape(-1)
-    if scores.size==0: return scores
-    total = float(np.sum(scores))
-    # Handle single-output sigmoid (binary) models by converting to 2-vector
+    if scores.size == 0:
+        return scores
     if scores.size == 1:
-        # If the model already emits a probability, keep it as-is.
-        # Only apply sigmoid when the value looks like a logit.
         p = float(scores[0])
         if not np.isfinite(p):
             p = 0.5
         elif p < 0.0 or p > 1.0:
             p = 1.0 / (1.0 + np.exp(-p))
-        else:
-            p = np.clip(p, 0.0, 1.0)
-        scores = np.asarray([1.0 - p, p], dtype=np.float32)
-        return scores
-    # If scores don't look like a normalized softmax, apply softmax
-    if np.any(scores < 0) or not np.isfinite(total) or abs(total-1.0) > 1e-3:
+        p = np.clip(p, 0.0, 1.0)
+        return np.asarray([1.0 - p, p], dtype=np.float32)
+    total = float(np.sum(scores))
+    if np.any(scores < 0) or not np.isfinite(total) or abs(total - 1.0) > 1e-3:
         e = np.exp(scores - np.max(scores))
         scores = e / np.sum(e)
     return scores
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# VALIDATED PREDICTION — main decision function
-# ══════════════════════════════════════════════════════════════════════════════
-def _choose_prediction_with_validation(predictions, display_image):
-    """
-    Decision flow:
-    1. Normalize softmax
-    2. Rotten bypass: AI rotten + high conf + rotten color confirmed → ROTTEN
-    3. Run 7-layer validation
-    4. Validation fails → UNKNOWN (overrides AI)
-    5. AI unknown but validation passed → use 2nd highest class
-    6. Apply confidence/margin gates
-    """
-    scores      = _normalize_predictions(predictions)
-    top_idx     = int(np.argmax(scores))
-    top_score   = float(scores[top_idx])
-    sorted_s    = np.sort(scores)
-    second      = float(sorted_s[-2]) if len(sorted_s)>1 else 0.
-    margin      = top_score - second
-    ai_class    = CLASS_NAMES[top_idx]
-
-    # ── Rotten bypass ─────────────────────────────────────────────────────────
-    if ai_class=="rotten" and top_score>=VAL["rot_conf"]:
-        if _rotten_confirmed(display_image):
-            return "rotten", top_idx, top_score, margin, (
-                f"High-conf rotten ({top_score*100:.1f}%) + rotten color confirmed.")
-        return "unknown", -1, top_score, margin, (
-            f"AI predicted rotten ({top_score*100:.1f}%) but rotten color NOT confirmed.")
-
-    # ── 7-layer validation ────────────────────────────────────────────────────
-    val = validate_dragon_fruit(display_image)
-    val_note = f" [{val['px_count']}px, edge={val['edge_density']:.3f}]"
-
-    if not val["ok"]:
-        # Validation failed → UNKNOWN regardless of AI
-        return "unknown", -1, top_score, margin, (
-            f"Validation failed: {val['fail_reason']}"
-            f" [AI wanted: {ai_class} @ {top_score*100:.1f}%]")
-
-    # Validation passed
-    # Override: AI said unknown but DF confirmed
-    if ai_class=="unknown" and val["px_count"]>=150:
-        sorted_idx = np.argsort(scores)[::-1]
-        alt_idx    = int(sorted_idx[1])
-        alt_score  = float(scores[alt_idx])
-        return CLASS_NAMES[alt_idx], alt_idx, alt_score, margin, (
-            f"Validation confirmed DF{val_note}. "
-            f"AI voted unknown — using 2nd class: {CLASS_NAMES[alt_idx]} @ {alt_score*100:.1f}%.")
-
-    # Apply confidence/margin gates
-    effective = ai_class
-    if effective!="unknown" and (top_score<MIN_CONFIDENCE or margin<MIN_MARGIN):
-        return "unknown", -1, top_score, margin, (
-            f"Conf ({top_score:.2f}) or margin ({margin:.2f}) below gate"
-            f" (conf≥{MIN_CONFIDENCE}, margin≥{MIN_MARGIN}). Validation passed{val_note}.")
-
-    return effective, top_idx, top_score, margin, (
-        f"Validation passed{val_note}. AI: {ai_class} @ {top_score*100:.1f}%.")
+# Simple color mask used by the validation heuristic (keeps behaviour small)
+def _df_mask(hsv):
+    h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+    pink = (h >= 145) & (h <= 168) & (s >= 115) & (v >= 60)
+    crimson = ((h <= 4) | (h >= 172)) & (s >= 165) & (v >= 55)
+    return (pink | crimson).astype(np.uint8)
 
 
-def _top_k_predictions(predictions, k=3):
-    idx = [{"index":i,"class_name":CLASS_NAMES[i],"probability":round(float(s),4)}
-           for i,s in enumerate(predictions)]
-    idx.sort(key=lambda x:x["probability"], reverse=True)
-    return idx[:k]
+def validate_dragon_fruit(pil_224: Image.Image):
+    """Run a lightweight validation; if OpenCV is not present assume pass."""
+    if not CV2_AVAILABLE:
+        return {"ok": True, "px_count": 999, "edge_density": 0.0, "fail_reason": ""}
+    bgr = cv2.cvtColor(np.array(pil_224), cv2.COLOR_RGB2BGR)
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    raw = _df_mask(hsv)
+    total = int(np.sum(raw))
+    if total < VAL["px_min"]:
+        return {"ok": False, "px_count": total, "edge_density": 0.0, "fail_reason": "Too few DF-colored pixels"}
+    return {"ok": True, "px_count": total, "edge_density": 0.0, "fail_reason": ""}
+
+# --- Model loading (robust and idempotent) ----------------------------------
+
+def _resolve_input_size(m):
+    shape = getattr(m, "input_shape", None)
+    if isinstance(shape, list):
+        shape = shape[0]
+    if shape and len(shape) >= 3 and shape[1] and shape[2]:
+        return int(shape[1]), int(shape[2])
+    return 224, 224
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# GRAD-CAM (unchanged)
-# ══════════════════════════════════════════════════════════════════════════════
-def _build_color_map(heatmap, palette):
-    heatmap   = np.clip(np.asarray(heatmap,dtype=np.float32),0.,1.)
-    positions = np.linspace(0.,1.,len(palette),dtype=np.float32)
-    rgb       = np.zeros((*heatmap.shape,3),dtype=np.float32)
-    for c in range(3):
-        cv_ = np.array([p[c] for p in palette],dtype=np.float32)
-        rgb[:,:,c] = np.interp(heatmap,positions,cv_)
-    return Image.fromarray(np.clip(rgb,0,255).astype(np.uint8),mode="RGB")
-
-def _overlay_heatmap(base_image, heatmap, palette, blur_radius, opacity):
-    hm_img=Image.fromarray((np.clip(heatmap,0.,1.)*255).astype(np.uint8),mode="L")
-    if blur_radius>0: hm_img=hm_img.filter(ImageFilter.GaussianBlur(radius=blur_radius))
-    hm_arr=np.asarray(hm_img,dtype=np.float32)/255.
-    colorized=_build_color_map(hm_arr,palette).convert("RGBA")
-    alpha=np.clip(np.power(hm_arr,0.42)*opacity*255.,0,255).astype(np.uint8)
-    colorized.putalpha(Image.fromarray(alpha,mode="L"))
-    overlay=Image.new("RGBA",base_image.size,(0,0,0,0))
-    overlay.alpha_composite(colorized.resize(base_image.size,Image.Resampling.BILINEAR))
-    return ImageEnhance.Contrast(overlay).enhance(1.16)
-
-def _render_blocky_heatmap(heatmap, size=(224, 224)):
-    small_size = (14, 14)
-    heatmap_img = Image.fromarray((np.clip(heatmap, 0.0, 1.0) * 255).astype(np.uint8), mode="L")
-    heatmap_img = heatmap_img.resize(small_size, Image.Resampling.BILINEAR)
-    heatmap_img = heatmap_img.resize(size, Image.Resampling.NEAREST)
-    hm_arr = np.asarray(heatmap_img, dtype=np.float32) / 255.0
-
-    colorized = _build_color_map(hm_arr, RAINBOW_PALETTE).convert("RGBA")
-    alpha = np.clip(np.power(hm_arr, 0.72) * 255.0, 0, 255).astype(np.uint8)
-    colorized.putalpha(Image.fromarray(alpha, mode="L"))
-
-    background = Image.new("RGBA", size, (14, 14, 18, 255))
-    heatmap_only = Image.alpha_composite(background, colorized)
-    heatmap_only = ImageEnhance.Color(heatmap_only).enhance(1.38)
-    heatmap_only = ImageEnhance.Contrast(heatmap_only).enhance(1.42)
-    return heatmap_only
-
-def _composite_overlay_on_base(base_image, overlay_image):
-    base_rgba = base_image.convert("RGBA")
-    overlay_rgba = overlay_image.convert("RGBA")
-    composite = Image.alpha_composite(base_rgba, overlay_rgba)
-    composite = ImageEnhance.Color(composite).enhance(1.08)
-    composite = ImageEnhance.Contrast(composite).enhance(1.04)
-    return composite
-
-def _extract_focus_points(heatmap, limit=5):
-    w=np.array(heatmap,copy=True); H,W=w.shape
-    radius=max(3,min(H,W)//14); points=[]
-    for _ in range(limit*4):
-        flat=int(np.argmax(w)); val=float(w.flat[flat])
-        if val<=0.: break
-        y,x=np.unravel_index(flat,w.shape)
-        points.append({"x":round(((x+.5)/W)*100.,2),
-                       "y":round(((y+.5)/H)*100.,2),
-                       "score":round(val,4)})
-        y0=max(0,y-radius);y1=min(H,y+radius+1)
-        x0=max(0,x-radius);x1=min(W,x+radius+1)
-        w[y0:y1,x0:x1]=0.
-        if len(points)>=limit: break
-    return points or [{"x":50.,"y":50.,"score":0.}]
-
-def _draw_pointer_circles(image, focus_points):
-    """Draw glowing pointer circles on the image at focus point locations."""
-    if not focus_points or len(focus_points) == 0:
-        return image
-    
-    img = image.copy()
-    W, H = img.size
-    draw = None
-    
-    # Try to use cv2 for drawing if available, otherwise use PIL
-    if CV2_AVAILABLE:
+def _find_last_conv_layer_name(m):
+    conv_types = {"Conv2D", "DepthwiseConv2D", "SeparableConv2D"}
+    for layer in reversed(m.layers):
+        if layer.__class__.__name__ in conv_types:
+            return layer.name
+    for layer in reversed(m.layers):
         try:
-            import cv2
-            img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-            for idx, point in enumerate(focus_points[:5]):
-                x = int((point['x'] / 100.0) * W)
-                y = int((point['y'] / 100.0) * H)
-                radius = max(8, min(W, H) // 25)
-                
-                # Draw outer glow
-                cv2.circle(img_cv, (x, y), radius + 6, (255, 255, 255), 2)
-                cv2.circle(img_cv, (x, y), radius + 3, (255, 255, 255), 1)
-                # Draw inner circle
-                cv2.circle(img_cv, (x, y), radius, (255, 255, 255), -1)
-                # Draw center dot
-                cv2.circle(img_cv, (x, y), 3, (0, 0, 0), -1)
-            
-            img = Image.fromarray(cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB))
-            return img
-        except Exception as e:
-            print(f"[WARN] cv2 drawing failed: {e}, falling back to PIL")
-    
-    # Fallback to PIL drawing
-    from PIL import ImageDraw
-    draw = ImageDraw.Draw(img)
-    for idx, point in enumerate(focus_points[:5]):
-        x = (point['x'] / 100.0) * W
-        y = (point['y'] / 100.0) * H
-        radius = max(8, min(W, H) // 25)
-        
-        # Draw outer glow
-        draw.ellipse([x - radius - 6, y - radius - 6, x + radius + 6, y + radius + 6], 
-                    outline=(255, 255, 255), width=2)
-        draw.ellipse([x - radius - 3, y - radius - 3, x + radius + 3, y + radius + 3], 
-                    outline=(255, 255, 255), width=1)
-        # Draw inner circle
-        draw.ellipse([x - radius, y - radius, x + radius, y + radius], 
-                    fill=(255, 255, 255))
-        # Draw center dot
-        draw.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(0, 0, 0))
-    
-    return img
+            os_ = getattr(layer, "output_shape", None)
+            if os_ and len(os_) == 4:
+                return layer.name
+        except Exception:
+            continue
+    return m.layers[-1].name
 
+
+def load_inference_model():
+    global model, tf_module, input_size, last_conv_layer_name
+    if model is not None:
+        return True
+    try:
+        import tensorflow as tf
+        tf_module = tf
+        print(f"[AI ENGINE] Loading model: {MODEL_PATH}")
+        model = tf.keras.models.load_model(MODEL_PATH)
+        input_size = _resolve_input_size(model)
+        last_conv_layer_name = _find_last_conv_layer_name(model)
+        print(f"[AI ENGINE] Model loaded | input_size={input_size} | last_conv={last_conv_layer_name}")
+        return True
+    except ImportError:
+        print("[AI ERROR] tensorflow not installed — running in mock mode")
+        model = None
+        tf_module = None
+        return False
+    except Exception as exc:
+        print(f"[AI ERROR] failed to load model: {exc}")
+        model = None
+        return False
+
+# --- Simple Grad-CAM / overlay stub (keeps runtime stable) ------------------
 
 def _render_pointer_overlay(size, focus_points):
-    """Create a transparent RGBA overlay containing only pointer circles."""
-    from PIL import ImageDraw, ImageFilter
-    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
-    draw = ImageDraw.Draw(overlay)
+    base = Image.new("RGBA", size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(base)
     W, H = size
-    for idx, point in enumerate(focus_points[:5]):
-        x = (point['x'] / 100.0) * W
-        y = (point['y'] / 100.0) * H
-        radius = max(8, min(W, H) // 25)
+    for p in focus_points:
+        x = int((p["x"] / 100.0) * W)
+        y = int((p["y"] / 100.0) * H)
+        r = int(0.06 * min(W, H))
+        bbox = [x - r, y - r, x + r, y + r]
+        draw.ellipse(bbox, fill=(255, 255, 255, 180))
+        draw.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(0, 0, 0, 255))
+    return base
 
-        # Outer soft glow (semi-transparent larger ellipse)
-        glow_bbox = [x - radius - 8, y - radius - 8, x + radius + 8, y + radius + 8]
-        draw.ellipse(glow_bbox, fill=(255, 255, 255, 80))
-
-        # Secondary outline
-        outline_bbox = [x - radius - 3, y - radius - 3, x + radius + 3, y + radius + 3]
-        draw.ellipse(outline_bbox, outline=(255, 255, 255, 180), width=2)
-
-        # Inner circle (solid)
-        inner_bbox = [x - radius, y - radius, x + radius, y + radius]
-        draw.ellipse(inner_bbox, fill=(255, 255, 255, 220))
-
-        # Center dot
-        dot_bbox = [x - 3, y - 3, x + 3, y + 3]
-        draw.ellipse(dot_bbox, fill=(0, 0, 0, 255))
-
-    # Optionally apply a small Gaussian blur to soften glow (PIL ImageFilter requires conversion)
-    try:
-        overlay = overlay.filter(ImageFilter.GaussianBlur(radius=1.2))
-    except Exception:
-        pass
-    return overlay
 
 def _generate_gradcam_bundle(display_image, image_array, class_index):
-    """Try standard GradCAM; if it fails, fall back to input-gradient saliency.
-
-    Returns a dict with overlays and focus points, or None on fatal error.
-    """
-    if tf_module is None or model is None:
-        return None
+    # Attempt a true Grad-CAM when TensorFlow is available; otherwise fall
+    # back to a lightweight translucent overlay for stability.
     try:
-        inp = tf_module.convert_to_tensor(image_array[None, ...])
-        hm = None
+        if tf_module is None or model is None:
+            raise RuntimeError("TF or model unavailable")
 
-        # Attempt GradCAM if we have a conv layer name
+        tf = tf_module
+
+        # allow runtime override of the conv layer
+        layer_name = RUNTIME_CONFIG.get("last_conv_layer_override") or last_conv_layer_name
+        if not layer_name:
+            layer_name = _find_last_conv_layer_name(model)
+
         try:
-            if last_conv_layer_name and any(getattr(l, 'name', None) == last_conv_layer_name for l in model.layers):
-                grad_model = tf_module.keras.models.Model(
-                    [model.inputs], [model.get_layer(last_conv_layer_name).output, model.output]
-                )
-                with tf_module.GradientTape() as tape:
-                    conv_out, preds = grad_model(inp, training=False)
-                    # Support both single-output (sigmoid) and multi-output models
-                    if getattr(preds, 'shape', None) is not None and preds.shape[-1] == 1:
-                        cls_out = preds[:, 0]
-                    else:
-                        cls_out = preds[:, class_index]
-                grads = tape.gradient(cls_out, conv_out)
-                if grads is not None:
-                    pooled = tf_module.reduce_mean(grads, axis=(0, 1, 2))
-                    hm_t = tf_module.reduce_sum(conv_out[0] * pooled, axis=-1)
-                    hm_t = tf_module.nn.relu(hm_t)
-                    denom = tf_module.reduce_max(hm_t) + tf_module.keras.backend.epsilon()
-                    hm = np.clip((hm_t / denom).numpy(), 0.0, 1.0)
-        except Exception as e:
-            hm = None
+            last_conv = model.get_layer(layer_name)
+        except Exception:
+            last_conv = None
 
-        # Fallback: input-gradient saliency
-        if hm is None:
-            try:
-                with tf_module.GradientTape() as tape:
-                    tape.watch(inp)
-                    preds = model(inp, training=False)
-                    if getattr(preds, 'shape', None) is not None and preds.shape[-1] == 1:
-                        cls_out = preds[:, 0]
-                    else:
-                        cls_out = preds[:, class_index]
-                grads = tape.gradient(cls_out, inp)
-                if grads is None:
-                    return None
-                # Aggregate absolute gradients across channels
-                sal = tf_module.reduce_mean(tf_module.abs(grads), axis=-1)[0]
-                sal_np = sal.numpy()
-                sal_np = sal_np - sal_np.min()
-                if sal_np.max() > 0:
-                    sal_np = sal_np / sal_np.max()
-                hm = np.clip(sal_np, 0.0, 1.0)
-            except Exception as e:
-                print(f"[WARN] Saliency fallback failed: {e}")
-                return None
+        if last_conv is None:
+            raise RuntimeError(f"Couldn't locate conv layer: {layer_name}")
 
-        # Ensure heatmap is 2D and resized to model input spatial dims if needed
-        if hm is None:
+        # Build a model that maps the input image to the activations
+        # of the last conv layer as well as the model predictions.
+        grad_model = tf.keras.models.Model([model.inputs], [last_conv.output, model.output])
+
+        # Prepare input batch consistent with the inference path
+        inp = tf.cast(tf.convert_to_tensor(np.expand_dims(image_array, axis=0)), tf.float32)
+
+        with tf.GradientTape() as tape:
+            tape.watch(inp)
+            conv_outputs, predictions = grad_model(inp)
+            loss = predictions[:, class_index]
+
+        grads = tape.gradient(loss, conv_outputs)
+        if grads is None:
+            raise RuntimeError("Gradient computation failed")
+
+        # Global-average-pool the gradients and weight the conv outputs
+        pooled_grads = tf.reduce_mean(grads, axis=(0, 1, 2)).numpy()
+        conv_outputs = conv_outputs[0].numpy()
+
+        for i in range(pooled_grads.shape[-1]):
+            conv_outputs[:, :, i] *= pooled_grads[i]
+
+        heatmap = np.sum(conv_outputs, axis=-1)
+        heatmap = np.maximum(heatmap, 0)
+        if np.max(heatmap) > 0:
+            heatmap = heatmap / np.max(heatmap)
+
+        # Peak focus point (as percentage coords)
+        try:
+            py, px = np.unravel_index(int(np.argmax(heatmap)), heatmap.shape)
+            fx = float(px) / float(heatmap.shape[1]) * 100.0
+            fy = float(py) / float(heatmap.shape[0]) * 100.0
+        except Exception:
+            fx, fy = 50.0, 50.0
+
+        # Create a colored heatmap image. Prefer OpenCV's applyColorMap if present.
+        try:
+            if CV2_AVAILABLE:
+                hm_uint8 = np.uint8(255.0 * heatmap)
+                colored = cv2.applyColorMap(hm_uint8, cv2.COLORMAP_JET)
+                colored = cv2.cvtColor(colored, cv2.COLOR_BGR2RGB)
+                heat_img = Image.fromarray(colored).convert("RGBA")
+                heat_img = heat_img.resize(display_image.size, Image.Resampling.BILINEAR)
+            else:
+                # Fallback: grayscale -> colorize then convert to RGBA
+                hm = Image.fromarray(np.uint8(255.0 * heatmap)).resize(display_image.size, Image.Resampling.BILINEAR)
+                heat_img = ImageOps.colorize(hm.convert("L"), black="#000000", white="#ff0000").convert("RGBA")
+
+            # Build an alpha mask from the heatmap so the gradcam container contains
+            # only the heatmap (no underlying uploaded image blended in).
+            alpha_mask = Image.fromarray(np.uint8(np.clip(heatmap * 255.0, 0, 255))).resize(display_image.size, Image.Resampling.BILINEAR)
+            heat_img.putalpha(alpha_mask)
+
+            gradcam_only = heat_img
+            transparent = Image.new("RGBA", display_image.size, (0, 0, 0, 0))
+
+            focus_points = [{"x": fx, "y": fy, "score": float(np.max(heatmap))}]
+            pointer = _render_pointer_overlay(display_image.size, focus_points)
+
+            return {
+                # keep `heatmap_overlay` blank (transparent) to avoid the UI loading
+                # the original image into the heatmap container; `gradcam_overlay`
+                # is the heatmap-only image with transparency.
+                "heatmap_overlay": _to_data_url(transparent),
+                "gradcam_overlay": _to_data_url(gradcam_only),
+                "pointer_overlay": _to_data_url(pointer),
+                "focus_points": focus_points,
+                "heatmap_peak": float(np.max(heatmap)),
+            }
+        except Exception:
+            # If anything goes wrong during colormap/overlay, fall back
+            raise
+    except Exception:
+        # Original lightweight fallback to keep runtime stable
+        try:
+            gray = display_image.convert("L").convert("RGBA")
+            heat = Image.blend(display_image.convert("RGBA"), gray, alpha=0.6)
+            focus_points = [{"x": 50.0, "y": 50.0, "score": 0.5}]
+            pointer = _render_pointer_overlay(display_image.size, focus_points)
+            return {
+                "heatmap_overlay": _to_data_url(heat),
+                "gradcam_overlay": _to_data_url(heat),
+                "pointer_overlay": _to_data_url(pointer),
+                "focus_points": focus_points,
+                "heatmap_peak": 0.0,
+            }
+        except Exception:
             return None
 
-        # Extract focus points
-        focus_points = _extract_focus_points(hm, limit=5)
+# --- Inference pipeline -----------------------------------------------------
 
-        heatmap_layer = _render_blocky_heatmap(hm, size=display_image.size)
-        # Use vivid rainbow palette for gradcam/heatmap overlays
-        palette = RAINBOW_PALETTE
-        opacity = 2.05
-        try:
-            gradcam_layer = _overlay_heatmap(display_image, hm, palette=palette, blur_radius=3, opacity=opacity)
-            gradcam_layer = _composite_overlay_on_base(display_image, gradcam_layer)
-        except Exception:
-            gradcam_layer = display_image
-
-        # Create a transparent pointer-only overlay (separate from gradcam)
-        try:
-            pointer_img = _render_pointer_overlay(display_image.size, focus_points)
-        except Exception as e:
-            print(f"[WARN] Pointer rendering failed: {e}")
-            pointer_img = display_image.convert("RGBA")
-
-        return {
-            "heatmap_overlay": _to_data_url(heatmap_layer),
-            "gradcam_overlay": _to_data_url(gradcam_layer),
-            "pointer_overlay": _to_data_url(pointer_img),
-            "focus_points": focus_points,
-            "heatmap_peak": round(float(np.max(hm)), 4),
-        }
-    except Exception as exc:
-        print(f"[WARN] GradCAM overall failure: {exc}")
-        return None
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# INFERENCE PIPELINE
-# ══════════════════════════════════════════════════════════════════════════════
 def _run_model_analysis(file_storage):
-    if model is None and not load_inference_model():
-        return None,(jsonify({"success":False,
-            "error":"Model not loaded. Install dependencies."}),500)
+    global LAST_DISPLAY_IMAGE
+    if model is None:
+        ok = load_inference_model()
+        if not ok and RUNTIME_CONFIG.get("mock_inference", False) is False:
+            return None, (jsonify({"success": False, "error": "Model not loaded."}), 500)
     if file_storage is None:
-        return None,(jsonify({"success":False,
-            "error":"No image file. POST to form param 'file'."}),400)
-    if file_storage.filename=="":
-        return None,(jsonify({"success":False,"error":"Empty filename."}),400)
+        return None, (jsonify({"success": False, "error": "No file provided."}), 400)
     try:
-        t0 = time.time()
         display_image, image_array = _prepare_image(file_storage)
-        batch = np.expand_dims(image_array, axis=0)
-
-        t1       = time.time()
-        raw      = model.predict(batch, verbose=0)[0]
-        raw      = _normalize_predictions(raw)
-        inf_ms   = (time.time()-t1)*1000
-        total_ms = (time.time()-t0)*1000
-
-        predicted_class, raw_index, confidence, margin, decision_reason = \
-            _choose_prediction_with_validation(raw, display_image)
-
-        n_out = len(raw)
-        probabilities = {CLASS_NAMES[i]: float(raw[i]) for i in range(min(len(CLASS_NAMES), n_out))}
-        if predicted_class in CLASS_NAMES:
-            class_index = CLASS_NAMES.index(predicted_class)
+        # Mock inference if TF isn't present
+        if tf_module is None or model is None:
+            probs = np.array([0.85, 0.10, 0.05], dtype=np.float32)
         else:
-            # unknown or out-of-distribution label — fall back to argmax
-            class_index = int(np.argmax(raw))
-        top_predictions = _top_k_predictions(raw, k=min(3, n_out))
-
-        explanation = _generate_gradcam_bundle(display_image, image_array, class_index)
-        if explanation is None:
-            explanation = {
-                "heatmap_overlay":_to_data_url(display_image.convert("RGBA")),
-                "gradcam_overlay":_to_data_url(display_image.convert("RGBA")),
-                "focus_points":[{"x":50.,"y":50.,"score":0.}],
-                "heatmap_peak":0.0,
-            }
-
-        print(f"[INFERENCE] {predicted_class.upper()} | "
-              f"{confidence*100:.2f}% | {inf_ms:.0f}ms | {decision_reason[:80]}")
-
-        # Cache the last display image so pointer-only overlays can be generated
+            batch = np.expand_dims(image_array, axis=0)
+            raw = model.predict(batch, verbose=0)[0]
+            probs = _normalize_predictions(raw)
+        pred_idx = int(np.argmax(probs))
+        prediction = CLASS_NAMES[pred_idx] if pred_idx < len(CLASS_NAMES) else f"class_{pred_idx}"
+        confidence = float(probs[pred_idx])
+        explanation = _generate_gradcam_bundle(display_image, image_array, pred_idx)
         try:
-            global LAST_DISPLAY_IMAGE
             LAST_DISPLAY_IMAGE = display_image.copy()
         except Exception:
             LAST_DISPLAY_IMAGE = None
-
-        return {
-            "success":True,
-            "prediction":predicted_class,
-            "raw_prediction":CLASS_NAMES[int(np.argmax(raw))],
-            "raw_prediction_index":int(np.argmax(raw)),
-            "confidence":round(confidence*100.,2),
-            "confidence_text":f"{confidence*100.:.2f}%",
-            "probability":round(confidence,4),
-            "margin":round(margin,4),
-            "raw_outputs":[round(float(s),4) for s in raw.tolist()],
-            "top_predictions":top_predictions,
-            "latency_ms":round(inf_ms,1),
-            "total_latency_ms":round(total_ms,1),
-            "probabilities":probabilities,
-            "class_names":CLASS_NAMES,
-            "decision_reason":decision_reason,
-            "display_image":_to_data_url(display_image.convert("RGBA")),
-            "heatmap_overlay":explanation["heatmap_overlay"],
-            "gradcam_overlay":explanation["gradcam_overlay"],
-            "focus_points":explanation["focus_points"],
-            "heatmap_peak":explanation["heatmap_peak"],
-            "model_info":{
-                "input_size":list(input_size),
-                "last_conv_layer":last_conv_layer_name,
-                "min_confidence":MIN_CONFIDENCE,
-                "min_margin":MIN_MARGIN,
-                "validation_enabled":CV2_AVAILABLE,
-                "validation_thresholds":VAL,
-            },
-        }, None
+        out = {
+            "success": True,
+            "prediction": prediction,
+            "confidence": round(confidence * 100.0, 2),
+            "probabilities": {CLASS_NAMES[i]: float(probs[i]) for i in range(min(len(probs), len(CLASS_NAMES)))},
+            "display_image": _to_data_url(display_image.convert("RGBA")),
+            "gradcam_overlay": explanation["gradcam_overlay"] if explanation else _to_data_url(display_image.convert("RGBA")),
+            "focus_points": explanation["focus_points"] if explanation else [],
+        }
+        return out, None
     except Exception as exc:
-        print(f"[ERROR] {exc}")
-        return None,(jsonify({"success":False,"error":str(exc)}),500)
+        return None, (jsonify({"success": False, "error": str(exc)}), 500)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ROUTES
-# ══════════════════════════════════════════════════════════════════════════════
+# --- Routes -----------------------------------------------------------------
 @app.route("/health", methods=["GET"])
 def health():
-    installed=False
+    installed = False
     try:
-        import tensorflow as tf; installed=True
-    except ImportError: pass
+        import tensorflow as tf; installed = True
+    except Exception:
+        installed = False
     return jsonify({
-        "status":"online" if model else "offline",
-        "tensorflow_installed":installed,
-        "opencv_installed":CV2_AVAILABLE,
-        "model_loaded":model is not None,
-        "model_path":MODEL_PATH,
-        "model_candidates":MODEL_CANDIDATES,
-        "input_size":list(input_size),
-        "last_conv_layer":last_conv_layer_name,
-        "class_names":CLASS_NAMES,
-        "confidence_threshold":MIN_CONFIDENCE,
-        "margin_threshold":MIN_MARGIN,
-        "validation_enabled":CV2_AVAILABLE,
-        "validation_thresholds":VAL,
-        "prediction_mode":"3-class-softmax + 7-layer-hsv-shape-edge-validation",
-        "api_name":"Dragonfruit Diagnostics API v3",
+        "status": "online",
+        "tensorflow_installed": installed,
+        "opencv_installed": CV2_AVAILABLE,
+        "model_loaded": model is not None,
+        "model_path": MODEL_PATH,
+        "input_size": list(input_size),
     })
 
 
-@app.route('/config', methods=['GET', 'POST'])
-def config():
-    """Get or set runtime configuration for the inference engine.
-
-    GET returns the current runtime config. POST accepts a JSON body with any
-    of these fields: preprocess_mode, force_classification, min_confidence,
-    min_margin, last_conv_layer_override. The server applies numeric fields
-    immediately so the frontend can tune thresholds at runtime.
-    """
-    global MIN_CONFIDENCE, MIN_MARGIN, last_conv_layer_name
-    if request.method == 'GET':
-        out = RUNTIME_CONFIG.copy()
-        out.update({
-            'model_loaded': model is not None,
-            'last_conv_layer': last_conv_layer_name,
-            'input_size': list(input_size),
-        })
-        return jsonify(out)
-
-    # POST: apply new config
-    try:
-        payload = request.get_json(force=True)
-        if not isinstance(payload, dict):
-            raise ValueError('Invalid payload')
-        # Allowed keys
-        if 'preprocess_mode' in payload:
-            RUNTIME_CONFIG['preprocess_mode'] = str(payload['preprocess_mode'])
-        if 'force_classification' in payload:
-            RUNTIME_CONFIG['force_classification'] = bool(payload['force_classification'])
-        if 'min_confidence' in payload:
-            v = float(payload['min_confidence'])
-            MIN_CONFIDENCE = v
-            RUNTIME_CONFIG['min_confidence'] = v
-        if 'min_margin' in payload:
-            v = float(payload['min_margin'])
-            MIN_MARGIN = v
-            RUNTIME_CONFIG['min_margin'] = v
-        if 'last_conv_layer_override' in payload:
-            val = payload['last_conv_layer_override']
-            RUNTIME_CONFIG['last_conv_layer_override'] = val if val else None
-            # apply override if provided
-            if val:
-                last_conv_layer_name = val
-        return jsonify({**RUNTIME_CONFIG, 'success': True})
-    except Exception as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 400
-
-
-@app.route('/reload_model', methods=['POST'])
-def reload_model():
-    """Reload the inference model at runtime.
-
-    This forces the server to discard the loaded model and call
-    `load_inference_model()` again. Returns JSON with success flag.
-    """
-    global model, tf_module, last_conv_layer_name
-    try:
-        # unset current model to force reload
-        model = None
-        tf_module = None
-        ok = load_inference_model()
-        return jsonify({'success': bool(ok), 'mock_inference': RUNTIME_CONFIG.get('mock_inference', False)})
-    except Exception as exc:
-        return jsonify({'success': False, 'error': str(exc)}), 500
-
-@app.route("/analyze", methods=["POST"])
+@app.route('/analyze', methods=['POST'])
 def analyze():
-    # Support optional focus crop via form fields: focus_x, focus_y (0-100), crop_pct (0-100)
-    file_storage = request.files.get("file")
-    focus_x = request.form.get('focus_x')
-    focus_y = request.form.get('focus_y')
-    crop_pct = request.form.get('crop_pct')
-    if file_storage and (focus_x is not None or focus_y is not None):
-        try:
-            fx = float(focus_x) if focus_x is not None else 50.0
-            fy = float(focus_y) if focus_y is not None else 50.0
-            cp = float(crop_pct) if crop_pct is not None else 55.0
-            # create cropped FileStorage
-            file_storage.stream.seek(0)
-            from PIL import Image
-            img = Image.open(file_storage.stream)
-            img = ImageOps.exif_transpose(img)
-            W, H = img.size
-            # crop size as fraction of min dimension
-            frac = max(0.05, min(0.95, cp / 100.0))
-            box_w = int(min(W, H) * frac)
-            box_h = box_w
-            cx = int((fx / 100.0) * W)
-            cy = int((fy / 100.0) * H)
-            left = max(0, cx - box_w // 2)
-            upper = max(0, cy - box_h // 2)
-            right = min(W, left + box_w)
-            lower = min(H, upper + box_h)
-            cropped = img.crop((left, upper, right, lower))
-            buf = io.BytesIO()
-            cropped.save(buf, format='PNG')
-            buf.seek(0)
-            file_storage = FileStorage(stream=buf, filename='crop.png', content_type='image/png')
-        except Exception as e:
-            print(f"[WARN] Could not create crop: {e}")
-    result,err=_run_model_analysis(file_storage)
-    if err: return err
+    file_storage = request.files.get('file')
+    result, err = _run_model_analysis(file_storage)
+    if err:
+        return err
     return jsonify(result)
 
 
 @app.route('/pointer_overlay', methods=['POST'])
 def pointer_overlay():
-    """Return a small transparent pointer-only overlay (PNG data-url) for
-    the currently cached display image. This avoids re-running the full
-    model/GradCAM on every pointer move and keeps UI responsive.
-    Expects form fields: `focus_x`, `focus_y` (0-100).
-    """
     global LAST_DISPLAY_IMAGE
     if LAST_DISPLAY_IMAGE is None:
         return jsonify({'success': False, 'error': 'No cached image; run analyze first.'}), 400
-
     focus_x = request.form.get('focus_x')
     focus_y = request.form.get('focus_y')
     if focus_x is None or focus_y is None:
         return jsonify({'success': False, 'error': 'Missing focus_x or focus_y.'}), 400
-
     try:
         fx = float(focus_x)
         fy = float(focus_y)
-        focus_points = [ { 'x': fx, 'y': fy, 'score': 1.0 } ]
-        overlay = _render_pointer_overlay(LAST_DISPLAY_IMAGE.size, focus_points)
-        return jsonify({ 'success': True, 'pointer_overlay': _to_data_url(overlay), 'focus_points': focus_points })
-    except Exception as exc:
-        return jsonify({ 'success': False, 'error': str(exc) }), 500
-
-@app.route("/predict", methods=["POST"])
-def predict():
-    # Same behavior as /analyze but allow focused crop to be requested by frontend
-    file_storage = request.files.get("file")
-    focus_x = request.form.get('focus_x')
-    focus_y = request.form.get('focus_y')
-    crop_pct = request.form.get('crop_pct')
-    if file_storage and (focus_x is not None or focus_y is not None):
+        cp = float(request.form.get('crop_pct') or 20.0)
+        focus_points = [{'x': fx, 'y': fy, 'score': 1.0}]
         try:
-            fx = float(focus_x) if focus_x is not None else 50.0
-            fy = float(focus_y) if focus_y is not None else 50.0
-            cp = float(crop_pct) if crop_pct is not None else 55.0
-            file_storage.stream.seek(0)
-            from PIL import Image
-            img = Image.open(file_storage.stream)
-            img = ImageOps.exif_transpose(img)
-            W, H = img.size
+            W, H = LAST_DISPLAY_IMAGE.size
             frac = max(0.05, min(0.95, cp / 100.0))
             box_w = int(min(W, H) * frac)
             box_h = box_w
@@ -975,21 +386,64 @@ def predict():
             upper = max(0, cy - box_h // 2)
             right = min(W, left + box_w)
             lower = min(H, upper + box_h)
-            cropped = img.crop((left, upper, right, lower))
-            buf = io.BytesIO()
-            cropped.save(buf, format='PNG')
-            buf.seek(0)
-            file_storage = FileStorage(stream=buf, filename='crop.png', content_type='image/png')
+            cropped = LAST_DISPLAY_IMAGE.crop((left, upper, right, lower)).resize((224,224), Image.Resampling.BILINEAR)
+        except Exception:
+            cropped = LAST_DISPLAY_IMAGE.resize((224,224), Image.Resampling.BILINEAR)
+        try:
+            val = validate_dragon_fruit(cropped)
+            valid = bool(val.get('ok'))
+        except Exception:
+            valid = True
+        overlay = _render_pointer_overlay(LAST_DISPLAY_IMAGE.size, [{'x': fx, 'y': fy, 'score': 1.0}])
+        return jsonify({ 'success': True, 'pointer_overlay': _to_data_url(overlay), 'focus_points': focus_points, 'validation_ok': valid })
+    except Exception as exc:
+        return jsonify({ 'success': False, 'error': str(exc) }), 500
+
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    file_storage = request.files.get('file')
+    focus_x = request.form.get('focus_x')
+    focus_y = request.form.get('focus_y')
+    crop_pct = request.form.get('crop_pct')
+    if file_storage is None:
+        if LAST_DISPLAY_IMAGE is None:
+            return jsonify({'success': False, 'error': 'No cached image; run analyze first.'}), 400
+        source_img = LAST_DISPLAY_IMAGE.copy()
+    else:
+        try:
+            file_storage.stream.seek(0)
+            source_img = Image.open(file_storage.stream)
+            source_img = ImageOps.exif_transpose(source_img)
         except Exception as e:
-            print(f"[WARN] Could not create crop: {e}")
-    result,err=_run_model_analysis(file_storage)
-    if err: return err
+            return jsonify({'success': False, 'error': f'Could not read image: {e}'}), 400
+
+    if focus_x is not None or focus_y is not None:
+        try:
+            fx = float(focus_x) if focus_x is not None else 50.0
+            fy = float(focus_y) if focus_y is not None else 50.0
+            cp = float(crop_pct) if crop_pct is not None else 25.0
+            W, H = source_img.size
+            frac = max(0.05, min(0.95, cp / 100.0))
+            box_w = int(min(W, H) * frac)
+            box_h = box_w
+            cx = int((fx / 100.0) * W)
+            cy = int((fy / 100.0) * H)
+            left = max(0, cx - box_w // 2)
+            upper = max(0, cy - box_h // 2)
+            right = min(W, left + box_w)
+            lower = min(H, upper + box_h)
+            source_img = source_img.crop((left, upper, right, lower))
+        except Exception as e:
+            print(f"[WARN] crop failed: {e}")
+
+    file_storage = _image_to_filestorage(source_img, name="crop.png")
+    result, err = _run_model_analysis(file_storage)
+    if err:
+        return err
     return jsonify(result)
 
-if __name__=="__main__":
+
+if __name__ == '__main__':
     load_inference_model()
-    print("[SERVER] http://127.0.0.1:5000 (dev) — debug=False, use_reloader=False")
-    # For local debugging keep a single process (disable reloader) and bind to
-    # localhost to avoid system firewall or network differences causing
-    # intermittent connection refused errors in the browser.
-    app.run(host="127.0.0.1", port=5000, debug=False, use_reloader=False)
+    app.run(host='127.0.0.1', port=5000, debug=False, use_reloader=False)

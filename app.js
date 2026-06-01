@@ -50,9 +50,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const imgOriginal = document.getElementById('img-original');
   const imgPointer = document.getElementById('img-pointer');
-  const imgHeatmapBase = document.getElementById('img-heatmap-base');
   const imgGradcamBase = document.getElementById('img-gradcam-base');
-  const imgMiniHeatmap = document.getElementById('img-mini-heatmap');
   const imgMiniGradcam = document.getElementById('img-mini-gradcam');
 
   const healthStatusSingle = document.getElementById('health-status-single');
@@ -75,6 +73,10 @@ document.addEventListener('DOMContentLoaded', () => {
   const spectrumUnknownVal = document.getElementById('spectrum-unknown-val');
   const metricAccuracyValue = document.getElementById('metric-accuracy-value');
   const metricLossValue = document.getElementById('metric-loss-value');
+  const hciPayloadBody = document.getElementById('hci-payload-body');
+  const hciPayloadStatus = document.getElementById('hci-payload-status');
+  const gradcamLoading = document.getElementById('gradcam-loading');
+  const hciSendBtn = document.getElementById('hci-send-btn');
 
   const statusConfig = {
     healthy: {
@@ -101,12 +103,26 @@ document.addEventListener('DOMContentLoaded', () => {
   };
 
   const transparentPixel = 'data:image/gif;base64,R0lGODlhAQABAAAAACw=';
+  const FOCUS_CROP_PCT = 25;
   let lastUploadedFile = null;
   let lastPointerPoint = { x: 50, y: 50 };
+  let pendingPointerPoint = null;
   let focusDebounceTimer = null;
   let pointerOverlayTimer = null;
   let focusRequestSeq = 0;
   let backendReadyPromise = null;
+
+  function getPointerOverlayMask() {
+    const pointerBox = document.getElementById('pointer-box');
+    if (!pointerBox) return null;
+    let mask = pointerBox.querySelector('.pointer-overlay-mask');
+    if (!mask) {
+      mask = document.createElement('div');
+      mask.className = 'pointer-overlay-mask';
+      pointerBox.appendChild(mask);
+    }
+    return mask;
+  }
 
   function setAnalyzeTheme(statusKey) {
     const config = statusConfig[statusKey] || statusConfig.unknown;
@@ -116,6 +132,46 @@ document.addEventListener('DOMContentLoaded', () => {
     document.body.style.animation = 'waveGradient 15s ease infinite';
   }
 
+  function setGradcamLoading(isLoading) {
+    if (gradcamLoading) {
+      gradcamLoading.classList.toggle('is-active', !!isLoading);
+      gradcamLoading.setAttribute('aria-hidden', isLoading ? 'false' : 'true');
+    }
+    if (hciPayloadStatus) {
+      hciPayloadStatus.textContent = isLoading ? 'sending' : 'idle';
+    }
+    if (hciSendBtn) {
+      hciSendBtn.disabled = isLoading || !pendingPointerPoint;
+    }
+  }
+
+  function renderHciPayload(point) {
+    if (!hciPayloadBody) return;
+    const cropSize = Math.max(5, Math.min(90, FOCUS_CROP_PCT));
+    const centerX = Number(point?.x) || 50;
+    const centerY = Number(point?.y) || 50;
+    const half = cropSize / 2;
+    const payload = {
+      source: lastUploadedFile ? lastUploadedFile.name : 'cached',
+      focus_x: centerX,
+      focus_y: centerY,
+      crop_pct: cropSize,
+      crop_box_pct: {
+        left: Math.max(0, +(centerX - half).toFixed(2)),
+        top: Math.max(0, +(centerY - half).toFixed(2)),
+        width: +cropSize.toFixed(2),
+        height: +cropSize.toFixed(2),
+      }
+    };
+    hciPayloadBody.textContent = JSON.stringify(payload, null, 2);
+    if (hciPayloadStatus) {
+      hciPayloadStatus.textContent = 'ready';
+    }
+    if (hciSendBtn) {
+      hciSendBtn.disabled = false;
+    }
+  }
+
   function setImageSources(sourceUrl) {
     document.querySelectorAll('.card-image-box, .mini-img-wrap').forEach((box) => {
       box.style.backgroundImage = `url("${sourceUrl}")`;
@@ -123,6 +179,15 @@ document.addEventListener('DOMContentLoaded', () => {
       box.style.backgroundPosition = 'center';
       box.style.backgroundSize = 'cover';
     });
+  }
+
+  function setGradcamBaseImage(sourceUrl) {
+    const gradcamBox = document.querySelector('.gradcam-overlay-box');
+    if (!gradcamBox) return;
+    gradcamBox.style.backgroundImage = `url("${sourceUrl}")`;
+    gradcamBox.style.backgroundRepeat = 'no-repeat';
+    gradcamBox.style.backgroundPosition = 'center';
+    gradcamBox.style.backgroundSize = 'cover';
   }
 
   function setOverlayImage(maskElement, imageUrl, blendMode = 'normal') {
@@ -215,6 +280,9 @@ document.addEventListener('DOMContentLoaded', () => {
     pointer.setAttribute('aria-label', 'Draggable pointer');
     pointer.setAttribute('role', 'img');
 
+    const focusBox = document.createElement('div');
+    focusBox.className = 'pointer-focus-box';
+
     const pointSeed = initialPoint || (Array.isArray(focusPoints) && focusPoints.length > 0 ? focusPoints[0] : { x: 50, y: 50 });
     let posX = Number(pointSeed.x) || 50;
     let posY = Number(pointSeed.y) || 50;
@@ -222,16 +290,22 @@ document.addEventListener('DOMContentLoaded', () => {
     const applyPosition = () => {
       pointer.style.left = `${Math.max(0, Math.min(100, posX))}%`;
       pointer.style.top = `${Math.max(0, Math.min(100, posY))}%`;
+      focusBox.style.left = `${Math.max(0, Math.min(100, posX))}%`;
+      focusBox.style.top = `${Math.max(0, Math.min(100, posY))}%`;
+      focusBox.style.width = `${Math.max(5, Math.min(90, FOCUS_CROP_PCT))}%`;
+      focusBox.style.height = `${Math.max(5, Math.min(90, FOCUS_CROP_PCT))}%`;
     };
 
-    const emitChange = () => {
+    const emitChange = (isFinal = false) => {
       if (typeof onChange === 'function') {
-        onChange({ x: posX, y: posY });
+        onChange({ x: posX, y: posY }, !!isFinal);
       }
     };
 
     let dragging = false;
     let pointerId = null;
+    let dragMoved = false;
+    let dragStart = { x: null, y: null };
 
     const updateFromEvent = (event) => {
       const rect = pointerBox.getBoundingClientRect();
@@ -250,6 +324,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const onPointerMove = (event) => {
       if (!dragging || (pointerId != null && event.pointerId !== pointerId)) return;
       event.preventDefault();
+      const moveX = event.clientX ?? (event.touches && event.touches[0] ? event.touches[0].clientX : null);
+      const moveY = event.clientY ?? (event.touches && event.touches[0] ? event.touches[0].clientY : null);
+      if (dragStart.x != null && dragStart.y != null && moveX != null && moveY != null) {
+        const dx = moveX - dragStart.x;
+        const dy = moveY - dragStart.y;
+        if ((dx * dx + dy * dy) >= 4) {
+          dragMoved = true;
+        }
+      }
       updateFromEvent(event);
     };
 
@@ -261,21 +344,41 @@ document.addEventListener('DOMContentLoaded', () => {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
       window.removeEventListener('pointercancel', onPointerUp);
+
+      // Emit only if the release occurs over the pointer and the user held/dragged it
+      const rect = pointer.getBoundingClientRect();
+      const upX = event.clientX ?? (event.changedTouches && event.changedTouches[0] ? event.changedTouches[0].clientX : null);
+      const upY = event.clientY ?? (event.changedTouches && event.changedTouches[0] ? event.changedTouches[0].clientY : null);
+      const releasedInside = (upX != null && upY != null)
+        ? (upX >= rect.left && upX <= rect.right && upY >= rect.top && upY <= rect.bottom)
+        : false;
+
+      if (releasedInside && dragMoved) {
+        emitChange(true);
+      }
     };
 
     pointer.addEventListener('pointerdown', (event) => {
       dragging = true;
+      dragMoved = false;
+      dragStart = {
+        x: event.clientX ?? (event.touches && event.touches[0] ? event.touches[0].clientX : null),
+        y: event.clientY ?? (event.touches && event.touches[0] ? event.touches[0].clientY : null),
+      };
       pointerId = event.pointerId;
       event.preventDefault();
       try { pointer.setPointerCapture(event.pointerId); } catch (e) {}
       updateFromEvent(event);
+      // During drag we listen for moves but don't trigger backend requests yet
       window.addEventListener('pointermove', onPointerMove, { passive: false });
       window.addEventListener('pointerup', onPointerUp, { passive: false });
       window.addEventListener('pointercancel', onPointerUp, { passive: false });
     });
 
     applyPosition();
-    emitChange();
+    // initial emit but not final
+    emitChange(false);
+    layer.appendChild(focusBox);
     layer.appendChild(pointer);
     pointerBox.appendChild(layer);
   }
@@ -286,27 +389,36 @@ document.addEventListener('DOMContentLoaded', () => {
     pointerBox.style.backgroundSize = 'cover';
     pointerBox.style.backgroundPosition = 'center';
     pointerBox.style.backgroundRepeat = 'no-repeat';
+    const overlayMask = getPointerOverlayMask();
+    if (overlayMask) {
+      overlayMask.style.backgroundImage = `url("${transparentPixel}")`;
+      overlayMask.style.opacity = '1';
+    }
     installDraggablePointer(pointerBox, focusPoints, scheduleFocusedPrediction, lastPointerPoint);
   }
 
   function applyFocusedResponse(data) {
-    setOverlayImage(document.querySelector('.heatmap-overlay-box .heatmap-color-mask'), data.heatmap_overlay || transparentPixel, 'normal');
+    if (data.display_image) {
+      setGradcamBaseImage(data.display_image);
+    }
+    // Grad-CAM overlay only (heatmap container removed)
     setOverlayImage(document.querySelector('.gradcam-overlay-box .gradcam-color-mask'), data.gradcam_overlay || transparentPixel, 'normal');
     data.class_names = data.class_names || ['healthy', 'rotten', 'unknown'];
     setStatusState(data.prediction || 'unknown', data);
   }
 
   async function requestFocusedPrediction(point) {
-    if (!lastUploadedFile) return;
     await waitForBackendReady();
     const requestId = ++focusRequestSeq;
     try {
       const formData = new FormData();
-      formData.append('file', lastUploadedFile);
+      if (lastUploadedFile) {
+        formData.append('file', lastUploadedFile);
+      }
       formData.append('focus_x', String(Number(point?.x) || 50));
       formData.append('focus_y', String(Number(point?.y) || 50));
-      // Slightly smaller crop yields faster, more localized updates
-      formData.append('crop_pct', '45');
+      // Small crop makes the classification follow the pointed region instead of the whole fruit
+      formData.append('crop_pct', String(FOCUS_CROP_PCT));
 
       const response = await fetchWithRetry(API_PREDICT_URL, { method: 'POST', body: formData }, 2);
 
@@ -316,38 +428,45 @@ document.addEventListener('DOMContentLoaded', () => {
         throw new Error(data.error || 'Focused inference failed.');
       }
       applyFocusedResponse(data);
+      const overlayMask = getPointerOverlayMask();
+      if (overlayMask && data.pointer_overlay) {
+        overlayMask.style.backgroundImage = `url("${data.pointer_overlay}")`;
+      }
     } catch (error) {
       console.error('Focused analysis error:', error);
+    } finally {
+      setGradcamLoading(false);
     }
   }
 
   async function requestPointerOverlay(point) {
-    if (!lastUploadedFile) return;
     try {
       await waitForBackendReady();
       const formData = new FormData();
       formData.append('focus_x', String(Number(point?.x) || 50));
       formData.append('focus_y', String(Number(point?.y) || 50));
+      // Use a tight crop for validation to avoid including background
+      formData.append('crop_pct', '18');
       const response = await fetchWithRetry(API_POINTER_URL, { method: 'POST', body: formData }, 1);
       const data = await response.json();
       if (!response.ok || !data.success) {
         throw new Error(data.error || 'Pointer overlay failed.');
       }
-      // Apply pointer overlay on the pointer box by compositing it over the base
-      const pointerBox = document.getElementById('pointer-box');
-      if (pointerBox) {
-        // Preserve existing base background (assumed to be the base image)
-        let base = pointerBox.style.backgroundImage || '';
-        // If base is empty but we have a known image source, fall back to current computed style
-        if (!base) {
-          const cs = getComputedStyle(pointerBox);
-          base = cs.backgroundImage || '';
-        }
-        // Compose overlay on top of base (CSS supports comma-separated backgrounds)
-        pointerBox.style.backgroundImage = `url("${data.pointer_overlay}"), ${base}`;
-        pointerBox.style.backgroundSize = 'cover, cover';
-        pointerBox.style.backgroundPosition = 'center, center';
-        pointerBox.style.backgroundRepeat = 'no-repeat, no-repeat';
+      const overlayMask = getPointerOverlayMask();
+      if (overlayMask) {
+        overlayMask.style.backgroundImage = `url("${data.pointer_overlay}")`;
+        overlayMask.style.opacity = '1';
+      }
+      // If validation failed for this tight crop, immediately show UNKNOWN state
+      if (data.validation_ok === false) {
+        setStatusState('unknown', {
+          probability: 0,
+          confidence: 0,
+          raw_outputs: [0,0,0],
+          decision_reason: 'Pointer crop validation failed: no dragon fruit detected in focused region.',
+          class_names: ['healthy','rotten','unknown'],
+          heatmap_peak: 0.0,
+        });
       }
     } catch (err) {
       // non-fatal: pointer overlay is best-effort
@@ -413,20 +532,21 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   }
 
-  function scheduleFocusedPrediction(point) {
+  // Schedule focused prediction only on final pointer release. Intermediate
+  // pointer moves update the draggable UI but do not send images to backend.
+  function scheduleFocusedPrediction(point, isFinal = false) {
     lastPointerPoint = {
       x: Number(point?.x) || 50,
       y: Number(point?.y) || 50,
     };
-    // Fast pointer overlay updates (low-cost, no model run)
-    if (pointerOverlayTimer) clearTimeout(pointerOverlayTimer);
-    pointerOverlayTimer = setTimeout(() => requestPointerOverlay(lastPointerPoint), 40);
 
-    // Debounced heavy focused prediction (model + GradCAM) — keep slightly slower
-    if (focusDebounceTimer) clearTimeout(focusDebounceTimer);
-    focusDebounceTimer = setTimeout(() => {
-      requestFocusedPrediction(lastPointerPoint);
-    }, 220);
+    if (!isFinal) {
+      // Do not send network requests while dragging; just update local state
+      return;
+    }
+
+    pendingPointerPoint = { ...lastPointerPoint };
+    renderHciPayload(pendingPointerPoint);
   }
 
   // Pointer rendering removed - pointers are now drawn on images in Python backend
@@ -686,6 +806,23 @@ document.addEventListener('DOMContentLoaded', () => {
       alert('Quick test failed: ' + (err.message || err));
     }
   });
+
+  if (hciSendBtn) {
+    hciSendBtn.addEventListener('click', async () => {
+      if (!pendingPointerPoint) return;
+      setGradcamLoading(true);
+      try {
+        requestPointerOverlay(pendingPointerPoint);
+      } catch (e) {
+        console.warn('pointer overlay request failed on send', e);
+      }
+      try {
+        await requestFocusedPrediction(pendingPointerPoint);
+      } catch (e) {
+        console.warn('focused prediction request failed on send', e);
+      }
+    });
+  }
   // populate initial values
   fetchRuntimeConfig();
 
@@ -756,9 +893,17 @@ document.addEventListener('DOMContentLoaded', () => {
     lastUploadedFile = file;
     const previewUrl = await readFileAsDataUrl(file);
     setImageSources(previewUrl);
-    setOverlayImage(document.querySelector('.heatmap-overlay-box .heatmap-color-mask'), transparentPixel, 'normal');
+    // heatmap container removed; only reset gradcam overlay
     setOverlayImage(document.querySelector('.gradcam-overlay-box .gradcam-color-mask'), transparentPixel, 'normal');
     setLoadingState();
+    if (hciPayloadBody) {
+      hciPayloadBody.textContent = 'No pointer input yet.';
+    }
+    pendingPointerPoint = null;
+    if (hciPayloadStatus) {
+      hciPayloadStatus.textContent = 'idle';
+    }
+    setGradcamLoading(false);
 
     const loadingOverlay = document.getElementById('analyze-loading-overlay');
     try {
@@ -780,7 +925,6 @@ document.addEventListener('DOMContentLoaded', () => {
       const baseImage = data.display_image || previewUrl;
       setImageSources(baseImage);
       // show returned overlays with proper blend mode for clearer hotspots
-      setOverlayImage(document.querySelector('.heatmap-overlay-box .heatmap-color-mask'), data.heatmap_overlay || transparentPixel, 'normal');
       setOverlayImage(document.querySelector('.gradcam-overlay-box .gradcam-color-mask'), data.gradcam_overlay || transparentPixel, 'normal');
       // set pointer panel and install a draggable pointer marker
       const pointerBox = document.getElementById('pointer-box');
@@ -789,15 +933,13 @@ document.addEventListener('DOMContentLoaded', () => {
           ? { x: Number(data.focus_points[0].x) || 50, y: Number(data.focus_points[0].y) || 50 }
           : { x: 50, y: 50 };
         renderPointerPanel(pointerBox, baseImage, data.focus_points || []);
+        const overlayMask = getPointerOverlayMask();
+        if (overlayMask && data.pointer_overlay) {
+          overlayMask.style.backgroundImage = `url("${data.pointer_overlay}")`;
+        }
       }
-      // create or refresh the heatmap legend/explanation
-      ensureHeatmapLegend();
+      // create or refresh the explanation legend (heatmap container removed)
       applyFocusedResponse(data);
-      // Immediately request a focused crop-based prediction at the top focus point
-      try {
-        const fp = (Array.isArray(data.focus_points) && data.focus_points.length>0) ? data.focus_points[0] : null;
-        if (fp) requestFocusedPrediction({ x: fp.x, y: fp.y });
-      } catch (e) { /* ignore */ }
       if (loadingOverlay) {
         loadingOverlay.style.display = 'none';
         loadingOverlay.setAttribute('aria-hidden', 'true');

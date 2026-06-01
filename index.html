@@ -148,24 +148,35 @@
             <!-- 2. Pointer (pointers drawn in Python) -->
             <div class="grid-card">
               <div class="card-image-box" id="pointer-box">
+                <div class="pointer-overlay-mask"></div>
               </div>
               <span class="card-label">Pointer</span>
             </div>
 
             <!-- 3. Rainbow Heatmap -->
-            <div class="grid-card">
-              <div class="card-image-box heatmap-overlay-box">
-                <div class="heatmap-color-mask"></div>
-              </div>
-              <span class="card-label">Heatmap</span>
-            </div>
+            <!-- heatmap removed -->
 
             <!-- 4. Grad-CAM -->
             <div class="grid-card">
               <div class="card-image-box gradcam-overlay-box">
                 <div class="gradcam-color-mask"></div>
+                <div class="gradcam-loading" id="gradcam-loading" aria-hidden="true">
+                  <div class="gradcam-loading-spinner" aria-hidden="true"></div>
+                  <div class="gradcam-loading-text">Updating…</div>
+                </div>
               </div>
               <span class="card-label">Grad-CAM</span>
+            </div>
+          </div>
+
+          <div class="hci-payload-card" id="hci-payload-card">
+            <div class="hci-payload-header">
+              <span>HCI Payload</span>
+              <span class="hci-payload-status" id="hci-payload-status">idle</span>
+            </div>
+            <pre class="hci-payload-body" id="hci-payload-body">No pointer input yet.</pre>
+            <div class="hci-payload-actions">
+              <button class="hci-send-btn" id="hci-send-btn" disabled>Send to Model</button>
             </div>
           </div>
 
